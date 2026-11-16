@@ -254,6 +254,19 @@ export const FeedbackListSchema = z.strictObject({
 
 export const FactSchema = z.string().min(1).max(LIMITS.factChars);
 
+const Origin = z.enum(['interactive', 'dashboard', 'connector', 'integration', 'agent']);
+
+export const ExportTrainingSchema = z.strictObject({
+  kind: z.enum(['sft', 'preference', 'retrieval', 'all']),
+  out: z.string().min(1).max(4096),
+  expert: z.string().min(1).max(128).optional(),
+  since: isoDate.optional(),
+  split: z.string().max(64).optional(),
+  include: z.array(Origin).max(5).optional(),
+  exclude: z.array(Origin).max(5).optional(),
+  force: z.boolean().optional(),
+});
+
 export const LiveEvalSchema = z.strictObject({
   domain: z.string().optional(),
   includeAgentResolved: z.boolean().optional(),

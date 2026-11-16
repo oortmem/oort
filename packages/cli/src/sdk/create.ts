@@ -13,6 +13,7 @@ import {
 import * as feedback from './feedback.js';
 import * as judge from './judge.js';
 import * as local from './local.js';
+import * as training from './training.js';
 import {
   agentFor,
   agentName,
@@ -27,6 +28,7 @@ import type {
   ConfirmOptions,
   ConsolidateResult,
   Explanation,
+  ExportTrainingOptions,
   FeedbackInput,
   OortFeedback,
   LinkResult,
@@ -50,6 +52,7 @@ import type {
   RememberResult,
   ResolveInput,
   ScopedOptions,
+  TrainingExportView,
   Turn,
   Warning,
   Whoami,
@@ -57,6 +60,7 @@ import type {
 import {
   ConfirmOptionsSchema,
   ConsolidateSchema,
+  ExportTrainingSchema,
   FactSchema,
   FactsSchema,
   FeedbackInputSchema,
@@ -260,6 +264,12 @@ class OortHandle implements Oort {
       if (this.#cloud()) throw cloud.localOnly('Consolidation');
       return abortable(o.signal, () => local.consolidate(ctx, o.budgetMs, o.signal));
     });
+  }
+
+  exportTraining(opts: ExportTrainingOptions): Promise<TrainingExportView> {
+    return this.#run(async (ctx) =>
+      training.exportTraining(ctx, check(ExportTrainingSchema, opts, 'export options')),
+    );
   }
 
   get judge(): OortJudge {

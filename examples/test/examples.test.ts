@@ -217,6 +217,11 @@ describe('SDK examples (run)', () => {
     expect(out).toEqual(['integration grace@example.com -', 'integration grace@example.com agent']);
   });
 
+  it('training-export: an expert exports integration labels, an agent is refused', async () => {
+    const { out } = await runExample('training-export.ts');
+    expect(out).toEqual(['1 integration', 'Verdict: rejected', 'expert-only']);
+  });
+
   it('feedback: an agent reports a wrong memory, a person confirms and supersedes it', async () => {
     const { out } = await runExample('feedback.ts');
     expect(out).toEqual(['pending', 'wrong', 'true superseded']);

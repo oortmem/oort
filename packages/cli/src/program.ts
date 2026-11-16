@@ -29,6 +29,10 @@ import { updateCommand, type UpdateDeps, type UpdateOptions } from './commands/u
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
 import { exportCommand } from './commands/export.js';
+import {
+  trainingExportCommand,
+  type TrainingExportCliOptions,
+} from './commands/training-export.js';
 import { forgetCommand } from './commands/forget.js';
 import { hookCommand } from './commands/hook.js';
 import { importCommand, importFileCommand } from './commands/import.js';
@@ -1236,7 +1240,8 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       ),
     );
 
-  p.command('export')
+  const exp = p
+    .command('export')
     .description('write every visible memory in the v2 export format (docs/export-format.md)')
     .option('--out <file>', 'write to a new file (0600) instead of stdout')
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
@@ -1247,7 +1252,38 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       run((o: { out?: string; force?: boolean; format?: string; includeWithdrawn?: boolean }) =>
         exportCommand(o, ctx),
       ),
-    );
+    )
+    // `export` reads its own --out, --force and --json wherever they stand, so after `training`
+    // they arrive here: they are handed on, and the backup's own flags are refused.
+    .hook('preSubcommand', (parent, sub) => {
+      const o = parent.opts() as { format?: string; includeWithdrawn?: boolean };
+      if (o.format !== undefined || o.includeWithdrawn === true) {
+        sub.error(
+          `error: unknown option '${o.format !== undefined ? '--format' : '--include-withdrawn'}'`,
+          { code: 'commander.unknownOption' },
+        );
+      }
+      for (const k of ['out', 'force', 'json']) {
+        const v: unknown = parent.getOptionValue(k);
+        if (v !== undefined) sub.setOptionValueWithSource(k, v, 'cli');
+      }
+    });
+  exp
+    .command('training')
+    .description('write the labels people gave as fine-tuning JSON Lines, one file per kind')
+    .requiredOption('--kind <kind>', 'sft, preference, retrieval or all')
+    .requiredOption('--out <dir>', 'the directory to write (0700; files 0600)')
+    .option('--expert <id>', 'only labels by this expert')
+    .option('--since <iso>', 'only labels made at or after this time')
+    .option('--split <time:fraction>', 'split each kind by time, e.g. time:0.8 (train, then eval)')
+    .option(
+      '--include <origin...>',
+      'add origins to interactive, dashboard, connector: integration',
+    )
+    .option('--exclude <origin...>', 'leave out origins, e.g. interactive')
+    .option('--force', 'replace the files of an earlier export in --out')
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((o: TrainingExportCliOptions) => trainingExportCommand(o, ctx)));
 
   groupHelp(p, ui);
   return p;

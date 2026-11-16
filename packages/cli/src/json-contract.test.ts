@@ -131,6 +131,7 @@ const CONTRACT = [
   'reindex',
   'import',
   'export',
+  'export training',
 ];
 
 interface Result {
@@ -473,6 +474,29 @@ describe('oort.v1: memories (local store)', () => {
       format: 2,
     });
     bad(await run(['export', '--format', '3', '--json']), 'export', 'usage');
+  });
+
+  it('export training', async () => {
+    const { h, run } = local();
+    const out = path.join(h.root, 'training');
+    const r = ok(
+      await run(['export', 'training', '--kind', 'all', '--out', out, '--json']),
+      'export training',
+    ) as { dir: string; manifest: { oort: string; files: unknown[] } };
+    expect(r.dir).toBe(out);
+    expect(r.manifest.oort).toBe('training-export');
+    expect(r.manifest.files).toHaveLength(3);
+    // The directory holds that export now: refused without --force.
+    bad(
+      await run(['export', 'training', '--kind', 'all', '--out', out, '--json']),
+      'export training',
+      'refused',
+    );
+    bad(
+      await run(['export', 'training', '--kind', 'all', '--out', out, '--split', '1', '--json']),
+      'export training',
+      'usage',
+    );
   });
 
   it('import claude-code', async () => {
@@ -1411,8 +1435,12 @@ describe('oort.v1 errors: retryable and retryAfter where they are known', () => 
 
 // ---------------------------------------------------------------------------------------------
 
+/** Every command that runs: the leaves, and a parent with its own action (`export`). */
 function leaves(cmd: Command): Command[] {
-  return cmd.commands.length === 0 ? [cmd] : cmd.commands.flatMap(leaves);
+  if (cmd.commands.length === 0) return [cmd];
+  const runs =
+    cmd.parent !== null && (cmd as unknown as { _actionHandler: unknown })._actionHandler;
+  return [...(runs ? [cmd] : []), ...cmd.commands.flatMap(leaves)];
 }
 
 describe('every command takes --json and has a contract test', () => {

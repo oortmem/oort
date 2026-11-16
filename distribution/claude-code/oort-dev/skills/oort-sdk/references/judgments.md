@@ -216,10 +216,69 @@ console.log(shown(draft.id)); // integration grace@example.com agent
   `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED`,
   `CURSOR_AGENT`, `GEMINI_CLI`). An agent that can run commands can still drive a terminal, so
   `interactive` is only as trustworthy as the shells on that machine. For labels you will
-  fine-tune on, prefer the dashboard and connectors; the training export will let you exclude
+  fine-tune on, prefer the dashboard and connectors; the training export (below) can leave out
   `interactive`.
 - A confirm records the confirmer's origin and keeps the agent's as `proposedOrigin`.
 - Origin does not change authority. A row written before it existed reads `agent` when an agent
   recorded it and no person has confirmed it, and `integration` otherwise.
-- An export of training data will trust only `interactive`, `dashboard` and `connector` labels
-  by default, and will let you exclude `interactive`.
+- The training export takes only `interactive`, `dashboard` and `connector` labels by default,
+  and never `agent` ones.
+
+## Training export (after 0.10.0)
+
+`exportTraining({ kind, out, ... })` writes the labels people gave as fine-tuning JSON Lines in
+the directory `out`: `sft.jsonl` (one chat row per judgment), `preference.jsonl` (`prompt`,
+`chosen`, `rejected` for each resolve that overruled the proposal), `retrieval.jsonl` (`query`,
+`positive`, `negative` from `irrelevant` and `helped` feedback) and `manifest.json`. The CLI is
+`oort export training --kind all --out training/`.
+
+<!-- example: examples/src/training-export.ts -->
+
+```ts
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createOort } from 'oortmem';
+
+// A review screen in your app: a person decides, so the handle runs in the expert role.
+await using review = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+});
+
+await review.judge.record({
+  subject: 'Post claims a cure for diabetes',
+  verdict: 'rejected',
+  reason: 'A medical claim with no source.',
+  domain: 'content',
+  by: 'ada',
+  reviewer: 'grace@example.com',
+});
+
+// Labels from code arrive as `integration`: add it to the default origins to export them.
+const out = mkdtempSync(join(tmpdir(), 'oort-training-'));
+const { manifest } = await review.exportTraining({ kind: 'sft', out, include: ['integration'] });
+
+const rows = readFileSync(join(out, 'sft.jsonl'), 'utf8').trim().split('\n');
+const row = JSON.parse(rows[0]!) as { messages: { content: string }[]; origin: string };
+console.log(manifest.counts.sft?.rows, row.origin); // 1 integration
+console.log(row.messages[1]!.content.split('\n')[0]); // Verdict: rejected
+
+// Model-facing code runs in the agent role, and an agent never exports training data.
+const agent = review.scoped({ judgeRole: 'agent' });
+await agent.exportTraining({ kind: 'sft', out }).catch((e: { reason?: string }) => {
+  console.log(e.reason); // expert-only
+});
+```
+
+- Expert role only: an agent-role handle is refused (`expert-only`). It reads only what the
+  handle's grant reads.
+- An expert-role handle records `integration`, so pass `include: ['integration']` to export
+  labels your own code recorded. `exclude` leaves origins out; `agent` is never exported.
+- Agent labels nobody confirmed, withdrawn judgments, pending and dismissed feedback are left
+  out and counted in the manifest by reason. Text is scrubbed of secrets again on the way out.
+- `split: 'time:0.8'` writes `<kind>.train.jsonl` and `<kind>.eval.jsonl`, every eval row
+  later than every train row. An earlier export in `out` is refused (`export-exists`) unless
+  `force: true`. The directory is 0700 and the files 0600.
+- `origin` says how a label arrived, not who made it: choose the origins you trust before you
+  train on them.
