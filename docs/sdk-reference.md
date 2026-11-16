@@ -26,7 +26,7 @@ await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
 
 **Classes:** [`OortError`](#oortmem-oorterror), [`OortAmbiguousIdError`](#oortmem-oortambiguousiderror), [`OortCloudOnlyError`](#oortmem-oortcloudonlyerror), [`OortInternalError`](#oortmem-oortinternalerror), [`OortNeedsConfirmationError`](#oortmem-oortneedsconfirmationerror), [`OortNeedsKeyError`](#oortmem-oortneedskeyerror), [`OortNeedsLoginError`](#oortmem-oortneedsloginerror), [`OortNetworkError`](#oortmem-oortnetworkerror), [`OortNotFoundError`](#oortmem-oortnotfounderror), [`OortRefusedError`](#oortmem-oortrefusederror), [`OortUsageError`](#oortmem-oortusageerror)
 
-**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`LinkView`](#oortmem-linkview), [`LinkResult`](#oortmem-linkresult), [`UnlinkResult`](#oortmem-unlinkresult), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
+**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`LinkView`](#oortmem-linkview), [`LinkResult`](#oortmem-linkresult), [`UnlinkResult`](#oortmem-unlinkresult), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ResolveInput`](#oortmem-resolveinput), [`PredictionView`](#oortmem-predictionview), [`ResolveView`](#oortmem-resolveview), [`LiveAgreement`](#oortmem-liveagreement), [`LiveEvalView`](#oortmem-liveevalview), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
 
 ### Functions
 
@@ -882,6 +882,147 @@ export interface JudgeResult {
   }[];
   importedExcluded?: number;
   agentRecordedExcluded?: number;
+  /**
+   * The kept prediction: resolve it with `judge.resolve(predictionId, …)` once a person decides.
+   * Absent where predictions are not kept.
+   */
+  predictionId?: string;
+}
+```
+
+<a id="oortmem-resolveinput"></a>
+
+#### `ResolveInput`
+
+What a person decided about a prediction.
+
+```ts
+export interface ResolveInput {
+  /** One of the prediction's `verdicts`. */
+  verdict: string;
+  /** Why, in their own words. A different verdict with a reason becomes a judgment, verbatim. */
+  reason?: string;
+  /** Tags the reason relies on. */
+  criteria?: readonly string[];
+  /** Who decided: the expert's id. */
+  by: string;
+  /** The domain for the judgment, when the prediction has none. */
+  domain?: string;
+}
+```
+
+<a id="oortmem-predictionview"></a>
+
+#### `PredictionView`
+
+A kept prediction: what judging proposed, and what a person decided.
+
+```ts
+export interface PredictionView {
+  id: string;
+  /** `pending`: waiting for a person; `resolved`; `expired`: nobody resolved it in time. */
+  state: 'pending' | 'resolved' | 'expired';
+  item: {
+    summary: string;
+    details?: string;
+    ref?: string;
+    domain?: string;
+    by?: string;
+  };
+  domain?: string;
+  /** What judging answered. */
+  outcome: JudgeResult['status'];
+  why?: JudgeResult['why'];
+  /** The predicted verdict, null when judging made none. A prediction, never the decision. */
+  verdict: string | null;
+  probability: number | null;
+  /** The verdicts it may be resolved with. */
+  verdicts: string[];
+  precedentIds: string[];
+  criteria: string[];
+  createdAt: string;
+  expiresAt: string;
+  resolution?: {
+    verdict: string;
+    reason?: string;
+    criteria: string[];
+    by: string;
+    at: string;
+    via: JudgmentVia;
+    /** The person chose the predicted verdict; null when there was none. */
+    agrees: boolean | null;
+    /** The judgment the resolve recorded. */
+    judgmentId?: string;
+    /** Resolved by an agent and not confirmed: the live evaluation leaves it out. */
+    agentRecorded: boolean;
+  };
+  /** Its text was purged: a judgment it cited was withdrawn or forgotten. */
+  purged?: true;
+}
+```
+
+<a id="oortmem-resolveview"></a>
+
+#### `ResolveView`
+
+```ts
+export interface ResolveView {
+  prediction: PredictionView;
+  agrees: boolean | null;
+  /** The judgment the resolve recorded: a verdict other than the predicted one, with a reason. */
+  judgment?: RecordJudgmentView;
+}
+```
+
+<a id="oortmem-liveagreement"></a>
+
+#### `LiveAgreement`
+
+```ts
+export interface LiveAgreement {
+  predicted: number;
+  agreed: number;
+  /** `agreed / predicted`; null when none. */
+  agreement: number | null;
+}
+```
+
+<a id="oortmem-liveevalview"></a>
+
+#### `LiveEvalView`
+
+Agreement and calibration from resolved predictions.
+
+```ts
+export interface LiveEvalView {
+  resolved: number;
+  overall: LiveAgreement;
+  /** Only predictions judging suggested (at or above its threshold). */
+  suggested: LiveAgreement;
+  /** The share of resolved predictions judging suggested a verdict for. */
+  coverage: number | null;
+  /** Agreement per confidence band, beside the band's mean probability. */
+  bands: {
+    from: number;
+    to: number;
+    predicted: number;
+    agreed: number;
+    agreement: number | null;
+    meanProbability: number | null;
+  }[];
+  /** The criteria people overruled most. */
+  criteria: {
+    criterion: string;
+    predicted: number;
+    disagreed: number;
+    disagreement: number;
+  }[];
+  domains: Record<string, LiveAgreement & {
+    resolved: number;
+  }>;
+  pending: number;
+  /** Agent-recorded resolves nobody confirmed, left out. */
+  agentResolvedExcluded: number;
 }
 ```
 
@@ -1063,11 +1204,38 @@ export interface OortJudge {
       id: string;
     })[];
   }>;
-  /** Expert role only. */
+  /**
+   * Expert role only. Takes a judgment id, or a prediction id to confirm an agent's resolve of it
+   * (and the judgment that resolve recorded).
+   */
   confirm(id: string): Promise<{
     id: string;
     changed: boolean;
   }>;
+  /**
+   * Records a person's decision on a prediction (`JudgeResult.predictionId`). In agent role it
+   * is stored unconfirmed, and `by` must be listed in `judge.experts`.
+   */
+  resolve(predictionId: string, input: ResolveInput): Promise<ResolveView>;
+  /** Kept predictions, newest first: `pending` (the default) or `resolved`. */
+  listPredictions(opts?: {
+    status?: 'pending' | 'resolved';
+    limit?: number;
+    domain?: string;
+  }): Promise<{
+    predictions: PredictionView[];
+  }>;
+  getPrediction(predictionId: string): Promise<PredictionView>;
+  /** Deletes a prediction with its text. */
+  forgetPrediction(predictionId: string): Promise<{
+    id: string;
+    forgotten: true;
+  }>;
+  /** Agreement, calibration and the most overruled criteria from resolved predictions. */
+  evalLive(opts?: {
+    domain?: string;
+    includeAgentResolved?: boolean;
+  }): Promise<LiveEvalView>;
 }
 ```
 
