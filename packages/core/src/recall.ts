@@ -758,27 +758,34 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     partOf.has(id) && !relevant(id) && !relevantToPart(id);
   // A question that gathers many things is gated over every candidate, not only the top k, and
   // then spread across sources and cut to `returnK`. The spread only reorders what passed the
-  // gate, so a memory the gate took out never comes back; `dropped` counts every one it took out.
+  // gate, so a memory the gate took out never comes back. `dropped` counts what the two rules and
+  // the gate took out of the first `returnK` places, as for any other query.
+  const returnK = config.recall.returnK;
   const candidates: typeof ordered = [];
   let droppedEarly = 0;
   for (const f of ordered) {
-    if (!enumeration && candidates.length >= config.recall.returnK) break;
-    if (timeOnlyDropped(f.id) || headDropped(f.id)) droppedEarly++;
-    else candidates.push(f);
+    if (!enumeration && candidates.length >= returnK) break;
+    if (timeOnlyDropped(f.id) || headDropped(f.id)) {
+      if (candidates.length < returnK) droppedEarly++;
+    } else candidates.push(f);
   }
-  let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
-  const dropped = droppedEarly + candidates.length - kept.length;
+  const passes = (f: { id: string }): boolean => relevant(f.id) || relevantToPart(f.id);
+  let kept = candidates.filter(passes);
+  const dropped = droppedEarly + candidates.slice(0, returnK).filter((f) => !passes(f)).length;
   if (enumeration) {
     // After the time boost and the part heads have set the order. A part's best match keeps its
-    // place, whatever its source; a memory with no session is a source of its own.
+    // place, whatever its source. A source is one session in one node: the same session id in
+    // another node is another source. A memory with no session is a source of its own.
     kept = spreadAcrossSources(
       kept,
       (id) => {
         const m = memories.get(id);
-        return m === undefined ? undefined : episodeSession(m);
+        if (m === undefined) return undefined;
+        const session = episodeSession(m);
+        return session === undefined ? undefined : `${nodeKey(nodeOfMemory(m))} ${session}`;
       },
       perSource,
-      config.recall.returnK,
+      returnK,
       new Set(partOf.keys()),
     );
   }

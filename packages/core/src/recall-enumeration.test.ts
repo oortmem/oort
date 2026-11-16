@@ -4,7 +4,10 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Embedder, MemoryStore, Reranker, ScopeFilter } from './adapters.js';
 import { resolveConfig, type ResolvedConfig } from './config.js';
+import { addressed } from './address.js';
 import { isEnumeration } from './enumeration.js';
+import { occurrencesOf } from './event-time.js';
+import { homeAddress, principalGrant } from './grant.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { recall, type RecallResult } from './recall.js';
@@ -196,7 +199,6 @@ describe('recall spreads an enumeration question across sources', () => {
     expect(ids(r)).not.toContain('e1');
     expect(ids(r)).toHaveLength(5);
     expect(sessionA(r)).toBe(4);
-    expect(r.gate?.dropped).toBeGreaterThanOrEqual(1);
     // Gate off: the same memory is a new source, and the spread takes it.
     const open = await run(
       QUESTION,
@@ -213,6 +215,29 @@ describe('recall spreads an enumeration question across sources', () => {
     expect(ids(full)).toEqual(['a1', 'a2', 'b1', 'a3', 'a4']);
   });
 
+  it('enumeration.gate-dropped-counts-only-the-first-k-places-as-any-query', async () => {
+    const ms = [...memories(), GATED];
+    // Reranked: a1 to a4, b1, c1 pass; e1 and `other` fail and rank last.
+    const count = async (returnK: number, perSource: number) => {
+      const r = await run(QUESTION, withRecall({ returnK, enumerationPerSource: perSource }), {
+        ms,
+        rerank: reranker(RERANK),
+      });
+      return r.gate?.dropped;
+    };
+    // Six places: nothing in them fails, though the gate took two out further down.
+    expect(await count(6, 2)).toBeUndefined();
+    expect(await count(6, 0)).toBeUndefined();
+    // Seven places: e1 is in them, as without the spread.
+    expect(await count(7, 2)).toBe(1);
+    expect(await count(7, 0)).toBe(1);
+    // Fast: the same count with and without the spread.
+    const fast = async (perSource: number) =>
+      (await run(QUESTION, withRecall({ returnK: 7, enumerationPerSource: perSource }), { ms }))
+        .gate?.dropped;
+    expect(await fast(2)).toBe(await fast(0));
+  });
+
   it('enumeration.a-memory-without-a-session-is-its-own-source', async () => {
     const ms = memories().map((m) =>
       m.id.startsWith('a') ? { ...m, source: { harness: 'test', decisions: [] } } : m,
@@ -221,6 +246,150 @@ describe('recall spreads an enumeration question across sources', () => {
     // No session: nothing to spread, the order is as without the spread.
     const off = await run(QUESTION, withRecall({ returnK: 4, enumerationPerSource: 0 }), { ms });
     expect(ids(r)).toEqual(ids(off));
+  });
+});
+
+describe('a source is one session in one node', () => {
+  const STAR = addressed(
+    homeAddress(
+      principalGrant(
+        { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+        { home: 'star' },
+      ),
+    ),
+    { agentId: 'claude-code' },
+  );
+  const note = (id: string, star: boolean) =>
+    memory({
+      id,
+      text: `Charity events I participate in, note ${id}.`,
+      embedding: Q,
+      source: at('session-1'),
+      ...(star && STAR),
+    });
+
+  it('enumeration.the-same-session-id-in-two-nodes-is-two-sources', async () => {
+    const ms = [
+      note('p1', false),
+      note('p2', false),
+      note('p3', false),
+      note('s1', true),
+      note('s2', true),
+    ];
+    const scores = { p1: 0.9, p2: 0.89, p3: 0.88, s1: 0.7, s2: 0.65 };
+    const r = await run(QUESTION, withRecall({ returnK: 4, skipRerankWhenConfident: false }), {
+      ms,
+      rerank: reranker(scores),
+    });
+    expect(r.read).toHaveLength(2);
+    // The Planet's session holds two places; the Star's session with the same id is another
+    // source, so it takes the next two ahead of the Planet's third note.
+    expect(ids(r)).toEqual(['p1', 'p2', 's1', 's2']);
+  });
+});
+
+describe('an enumeration question that names a time', () => {
+  const MARCH_NOW = new Date('2023-04-20T10:00:00.000Z');
+  const said = (id: string, text: string, when: string, session: string): Memory =>
+    makeMemory({
+      id,
+      text,
+      stub: text.slice(0, 40),
+      createdAt: when,
+      validFrom: when,
+      updatedAt: when,
+      occurred: occurrencesOf(text, new Date(when)),
+      source: at(session),
+    });
+  const ASK = 'How many times did I go hiking in March?';
+  // One session told of three March hikes; two others of one each. One more hike was said in
+  // January, before March. Each shed note is in March, in a session of its own, with no word of
+  // the question: only the time channel finds it.
+  const hikes = [
+    said('h1', 'In March I went hiking at Mount Tam.', '2023-04-02T09:00:00.000Z', 'sa'),
+    said('h2', 'In March I went hiking at Mount Tam again.', '2023-04-02T09:01:00.000Z', 'sa'),
+    said(
+      'h3',
+      'In March I went hiking at Mount Tam a third time.',
+      '2023-04-02T09:02:00.000Z',
+      'sa',
+    ),
+    said('hb', 'Went hiking at Point Reyes on 12 March 2023.', '2023-03-12T18:00:00.000Z', 'sb'),
+    said('hc', 'Went hiking in Muir Woods on 20 March 2023.', '2023-03-20T18:00:00.000Z', 'sc'),
+    said('old', 'I went hiking at Mount Diablo.', '2023-01-10T09:00:00.000Z', 'sd'),
+    ...Array.from({ length: 6 }, (_, i) =>
+      said(
+        `shed${i}`,
+        `Painted the shed, coat ${i}.`,
+        `2023-03-${String(i + 10)}T09:00:00.000Z`,
+        `se${i}`,
+      ),
+    ),
+  ];
+  const SCORES = { h1: 0.9, h2: 0.89, h3: 0.88, hb: 0.6, hc: 0.55, old: 0.58 };
+
+  async function timeStore(): Promise<MemoryStore> {
+    return setup(hikes);
+  }
+
+  it('enumeration.time-the-question-is-one-and-names-march', async () => {
+    expect(isEnumeration(ASK)).toBe(true);
+    const r = await recall(
+      { text: ASK, scope: SCOPE },
+      { store: await timeStore(), config: withRecall({ returnK: 4 }), now: MARCH_NOW },
+    );
+    expect(r.temporal?.range).toBeDefined();
+  });
+
+  it('enumeration.time-the-boost-orders-and-the-cap-still-holds-after-it', async () => {
+    const go = async (perSource: number) =>
+      recall(
+        { text: ASK, scope: SCOPE },
+        {
+          store: await timeStore(),
+          rerank: reranker(SCORES),
+          config: withRecall({
+            returnK: 4,
+            enumerationPerSource: perSource,
+            skipRerankWhenConfident: false,
+          }),
+          now: MARCH_NOW,
+        },
+      );
+    const off = await go(0);
+    // The boost lifts hc (0.55, in March) past old (0.58, said before March).
+    expect(ids(off)).toEqual(['h1', 'h2', 'h3', 'hb']);
+    const on = await go(2);
+    // h3 is in March and boosted, but its session already holds two places: it does not skip
+    // the cap. hc follows hb by the boosted order, ahead of old.
+    expect(ids(on)).toEqual(['h1', 'h2', 'hb', 'hc']);
+    expect(on.memories.every((m) => !m.id.startsWith('shed'))).toBe(true);
+  });
+
+  it('enumeration.time-only-memories-stay-out-though-each-is-a-new-source', async () => {
+    // Fast: every shed note is in March and alone in its session, so the spread would favour it,
+    // but the gate drops a memory only the time channel found before the spread sees it.
+    const r = await recall(
+      { text: ASK, scope: SCOPE },
+      {
+        store: await timeStore(),
+        config: withRecall({ returnK: 8, minCoverage: 0.3 }),
+        now: MARCH_NOW,
+      },
+    );
+    expect(ids(r).some((id) => id.startsWith('shed'))).toBe(false);
+    // The long session's third hike waits until the other sessions are in.
+    expect(ids(r)).toEqual(['h1', 'hb', 'hc', 'h2', 'old', 'h3']);
+    // With the gate off the time-only rule lets them through, and the spread takes them.
+    const open = await recall(
+      { text: ASK, scope: SCOPE },
+      {
+        store: await timeStore(),
+        config: withRecall({ returnK: 8, minCoverage: 0 }),
+        now: MARCH_NOW,
+      },
+    );
+    expect(ids(open).some((id) => id.startsWith('shed'))).toBe(true);
   });
 });
 

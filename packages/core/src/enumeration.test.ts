@@ -35,6 +35,12 @@ describe('isEnumeration: questions that gather many things', () => {
     'How many hours have I spent playing games in total?',
     'What is the total amount of money I raised for charity?',
     'How far did we hike altogether on the trip?',
+    // A perfect or past clause in other shapes.
+    'How many concerts have we been to this year?',
+    "Which of the cafes I've tried did I like the most?",
+    'Name all the hikes we already finished.',
+    "How many tanks do I currently have, including the one I set up for my friend's kid?",
+    'What is the total number of siblings I have?',
   ])('enumeration.detects %s', (q) => {
     expect(isEnumeration(q)).toBe(true);
   });
@@ -59,6 +65,15 @@ describe('isEnumeration: questions that gather many things', () => {
     'I do this all the time.',
     'Where did I put my keys?',
     'What did I eat for dinner on Monday?',
+    // Coding prompts in the present: no past the person tells of.
+    'how do I get the most out of this hook',
+    'what is the most common error in my log',
+    'how do I handle every request in my app',
+    'list the files in my repo',
+    'how many tests do we run in CI',
+    'How many workers do we need for every request?',
+    'How do I read all the files in my project?',
+    'Which endpoint do we call the most?',
     // Instructions.
     'Fix all the failing tests I wrote yesterday.',
     'Rename every variable I added in the parser.',

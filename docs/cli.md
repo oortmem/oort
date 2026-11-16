@@ -1748,16 +1748,20 @@ that talked about the topic at length can fill the top `returnK` and push the ot
 Recall spots these questions by rules in code (no model call). It looks for "the order of" or
 "in what order", "how many" before a plural thing (not a unit of time), "the most", "the least"
 or "most often" (not "most recent"), "all the", "every", "list", and "in total". The question
-must be about you ("I", "my", "we"). Code, instructions ("fix all the failing tests") and long
-or multi-line prompts never count. For such a question, the relevance gate runs over every
-candidate first. Then each session keeps at most `recall.enumerationPerSource` places (2 by
-default) in rank order, and memories from other sessions take the next ones. When there are
-fewer sessions than places, the skipped memories fill the rest in rank order. The spread only
-reorders what passed the gate, so it never lets a weak match in. It runs after the time boost
-and keeps each part's best match in its place. A memory with no session counts as its own. With
-a reranker, the one rerank call asks for every candidate's score, as a split question does.
-`fast` and `full` modes both spread. Any other question is ranked exactly as before. Set
-`recall.enumerationPerSource` to 0 to turn the spread off.
+must be about you ("I", "my", "we"). Apart from an order or a total, it must also tell of your
+past: "did I", "have we", "I visited", "my plants needed". So "how many tests do we run in CI"
+and "what is the most common error in my log" do not count. Neither do code, instructions ("fix
+all the failing tests") or long and multi-line prompts. For such a question, the relevance gate
+runs over every candidate first. Then each session keeps at most `recall.enumerationPerSource`
+places (2 by default) in rank order, and memories from other sessions take the next ones. A
+session is counted per node: the same session in your Planet and in an agent's Star is two.
+When there are fewer sessions than places, the skipped memories fill the rest in rank order. The
+spread only reorders what passed the gate, so it never lets a weak match in, and the gate's
+`dropped` count covers the first `returnK` places, as for any other question. It runs after the
+time boost and keeps each part's best match in its place. A memory with no session counts as
+its own. With a reranker, the one rerank call asks for every candidate's score, as a split
+question does. `fast` and `full` modes both spread. Any other question is ranked exactly as
+before. Set `recall.enumerationPerSource` to 0 to turn the spread off.
 
 ### Places: spatial memory
 
