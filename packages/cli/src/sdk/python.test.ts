@@ -267,6 +267,18 @@ const PYTHON_GAPS: Record<string, string> = {
       'cloud-a-key-records-and-a-person-decides',
     ].map((id) => [`cloud judge.${id}`, 'judgments in cloud mode are TypeScript only for now']),
   ),
+  // Places in Oort Cloud reach the TypeScript SDK first; the Python client's cloud mode still
+  // refuses them (local-only) before anything is sent.
+  ...Object.fromEntries(
+    [
+      'within-keeps-whole-segments-and-explains-the-path',
+      'near-keeps-the-radius-on-one-map-with-the-distance',
+      'remember-and-observe-carry-a-place',
+      'a-bad-place-or-filter-is-a-usage-error',
+      'near-over-the-oort-cloud-limit-is-a-usage-error',
+      'a-place-oort-cloud-refuses-is-a-usage-error',
+    ].map((id) => [`cloud spatial.${id}`, 'places in cloud mode are TypeScript only for now']),
+  ),
 };
 
 describePy('Python client: the SDK contract suite (contract/sdk)', () => {
@@ -591,6 +603,9 @@ describe('golden vectors (contract/sdk/vectors)', () => {
       { status: 403, code: 'expert_only', message: 'A person decides this in the dashboard.' },
       { status: 503, code: 'cap_unavailable', message: 'The daily count could not be kept.' },
       { status: 409, code: 'not_current', message: 'That judgment is not current.' },
+      // Places in Oort Cloud: core's message, or the near limit's, unchanged.
+      { status: 400, code: 'bad_place', message: 'within must be 1 to 16 segments.' },
+      { status: 400, code: 'bad_place' },
     ];
     vector(
       'cloud-errors.json',

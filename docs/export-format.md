@@ -129,9 +129,11 @@ hold only Planet memories. A reader maps a version 1 line to the Planet its
 `scope` names, with `scope.agentId` as the author; an import into another
 account moves it to that account's Planet. `oort cloud import` uploads
 version 1, which Oort Cloud reads, and `oort cloud export` returns what Oort
-Cloud writes. Oort Cloud does not hold places yet, so `oort cloud import`
-sends each memory without its `place` and reports how many it left out
-(`placesLeftOut` in `--json`).
+Cloud writes. Version 1 holds no `place`, but Oort Cloud's import takes one on
+a version 1 line (after 0.10.0), so `oort cloud import` sends each memory with
+its `place`, checked by Oort Cloud with core's rules. It skips memories already
+in Oort Cloud, so one uploaded by an earlier version stays there without its
+place.
 
 Oort Cloud also writes version 1 for one end user of an account
 (`GET /v1/end-users/:id/export`, `oort.endUsers.export(id)` in the SDK): every

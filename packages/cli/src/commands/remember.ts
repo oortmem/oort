@@ -107,18 +107,12 @@ export async function rememberCommand(
     const cloud = cloudOf(w);
     let results: CloudRememberResult[];
     if (cloud !== undefined) {
-      if (place !== undefined) {
-        // Oort Cloud holds no places yet (CON-87): refused before anything is sent.
-        throw new Refusal(
-          'A place is local-only for now: Oort Cloud does not hold places yet. Run `oort cloud use --local` to use it.',
-          { code: 'refused' },
-        );
-      }
       refuseStarInCloud(w);
       const project = w.scope.projectId;
       results = await rememberFactsInCloud(cloud, [fact], {
         ...(type !== undefined && { type }),
         ...(project !== undefined && { project: { project, ...privacyStatement(w) } }),
+        ...(place !== undefined && { place }),
       });
     } else {
       results = await rememberFacts(w, [fact], {

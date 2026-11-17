@@ -238,7 +238,7 @@ export interface RecallTarget extends Pick<
   grant?: Grant;
 }
 
-/** Following links in Oort Cloud: refused, as spatial options are, until CON-153. */
+/** Following links in Oort Cloud: refused until CON-153. */
 export const LINKS_LOCAL_ONLY =
   'Following links is local-only for now: Oort Cloud does not hold links yet. Run `oort cloud use --local` to use --links.';
 
@@ -306,13 +306,6 @@ export async function runRecall(
     // Oort Cloud holds no links yet (CON-153): refused before anything is sent.
     throw new Refusal(LINKS_LOCAL_ONLY, { code: 'refused' });
   }
-  if (cloud !== undefined && spatial !== undefined) {
-    // Oort Cloud holds no places yet (CON-87): refused before anything is sent.
-    throw new Refusal(
-      'near and within are local-only for now: Oort Cloud does not hold places yet. Run `oort cloud use --local` to use them.',
-      { code: 'refused' },
-    );
-  }
   if (cloud !== undefined) {
     // Oort Cloud reads the account's Planet and, in the hive beta, its Constellations; `include`
     // narrows that, and a level the account cannot read is the API's own scope_denied.
@@ -330,6 +323,9 @@ export async function runRecall(
       k: opts.k ?? 10,
       ...(speed !== 'full' && { rerank: false }),
       ...(speed === 'lexical' && { embed: false }),
+      // A spatial recall reads the account's own memories only, never a Constellation.
+      ...(spatial?.within !== undefined && { within: spatial.within }),
+      ...(spatial?.near !== undefined && { near: spatial.near }),
     });
   }
   if (w.store === undefined) throw new Error('unreachable: a local recall without a store');

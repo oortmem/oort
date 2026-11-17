@@ -107,7 +107,7 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | ---------------------------------------------- | ------------------------------------------ | ----- | ------------------------- |
 | `recall(query, opts?)`                         | `RecallResult`                             | yes   | yes                       |
 | `observe(turn, { signal? })`                   | `ObserveResult`                            | yes   | yes                       |
-| `remember(facts, { type?, place? })`           | `RememberResult`                           | yes   | yes (`place`: `refused`)  |
+| `remember(facts, { type?, place? })`           | `RememberResult`                           | yes   | yes (`place` after 0.10.0) |
 | `forget(id, { everywhere? })`                  | `{ forgotten, rewritten?, notRewritten?, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
 | `pin(id)` / `unpin(id)`                        | `{ id, pinned, changed }`                  | yes   | yes (`changed: null`)     |
 | `recent({ since?, limit? })`                   | `{ memories, warnings }`                   | yes   | yes                       |
@@ -144,7 +144,7 @@ read: `self`, `planet`, `star`, `constellation`, `galaxy`), `budgetChars` (the d
 for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `fast`: no rerank;
 `lexical`: no model call), `inferTime` (default true, as the CLI does: a past time in the query ranks the results, and a
 question about a state then, "which port did we use on 2 April", picks as-of),
-`within` and `near` (spatial memory, 0.9.0 or newer, local mode only: see
+`within` and `near` (spatial memory: 0.9.0 or newer locally, after 0.10.0 in Oort Cloud; see
 [Spatial memory](#spatial-memory)) and `signal`.
 
 **`forget` locally** also rewrites the later memories of the forgotten one's supersede chain that
@@ -1188,18 +1188,26 @@ A robot that remembers where it saw each tool can then ask which toolboxes are i
 is within 1.5 m of it, and get only the memories from there. `within` and `near` filter before
 ranking and before `limit` is taken.
 
-Places need 0.9.0 or newer and the local engine. Oort Cloud does not hold them yet, so in cloud
-mode `within`, `near` and `place` are refused before anything is sent (`OortRefusedError`, reason
-`local-only`, fix `oort cloud use --local`).
+Places need 0.9.0 or newer on the local engine, and a version after 0.10.0 in Oort Cloud. The same
+calls, options and checks work in both modes. In Oort Cloud:
+
+- A spatial recall reads only your own memories, never a Constellation.
+- A `near` whose region holds more than 2,000 placed memories you can read (after `within`) is
+  refused with `OortUsageError` (reason `invalid-argument`) and Oort Cloud's message, which asks
+  for a smaller radius or a `within`. The local engine has no such limit.
+- A place or filter Oort Cloud refuses is the same `OortUsageError` local mode gives, with Oort
+  Cloud's message. The SDK checks every place before it is sent, so this is rare.
+- `oort cloud import` now uploads each memory with its place. It skips memories already in Oort
+  Cloud, so one uploaded by an earlier version stays there without its place.
 
 <!-- example: examples/src/spatial.ts -->
 
 ```ts
 import { createOort, type Place } from 'oortmem';
 
-// A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
-// the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
-await using oort = await createOort({ mode: 'local' });
+// A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
+// on the local engine (0.9.0 or newer) and on Oort Cloud (after 0.10.0).
+await using oort = await createOort();
 
 const room = (r: string, x: number, y: number, at?: string): Place => ({
   nodeId: `site:hq/room:${r}${at === undefined ? '' : `/${at}`}`,
@@ -1264,7 +1272,9 @@ Each memory a spatial recall returns carries its `place`, and its `why` adds `pl
 `near`, `distanceM` (metres; 0 inside the region).
 
 **Writing.** `remember(facts, { place })` tags every fact of the call; `observe({ ..., place })`
-tags the memories the turn writes. A fact that supersedes or corrects another gets the turn's
+tags the memories the turn writes. In Oort Cloud, a retried `remember` is saved once (its
+`turnRef` holds the fact, its type hint, the project, the UTC day and the place), so the same fact at another
+place on the same day is saved again, not taken for a retry. A fact that supersedes or corrects another gets the turn's
 place only, never the old one's. A refinement keeps its place unless the turn gives one. A turn
 seen somewhere else than a memory it would reinforce adds a memory instead (decision `place` /
 `elsewhere`), within the two places' `sigma`. Deciding that a thing moved is a later release's

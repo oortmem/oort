@@ -313,6 +313,14 @@ return every place. `spatialConformance(name, make)` in `@oortmem/core/store-con
 store: the place round-trips, whole-segment matching, the radius and its edge, other maps and frames,
 the combined filter, the grant still applying, and the filter applying before `k`.
 
+Oort Cloud (after 0.10.0) holds places too and applies the same rules behind its API: a place or a
+filter is checked with core's rules (`400 bad_place`, nothing saved), and the filter applies before
+ranking and before `k`. A spatial recall there reads only the account's own memories, never a
+Constellation (a Constellation copy carries no place). A `near` whose region holds more than 2,000
+placed memories the caller can read (after `within`) is refused with `400 bad_place`, asking for a
+smaller radius or a `within`. The routes and limits are in `packages/cli/test/cloud-contract.json`
+(`places`).
+
 ## Event time
 
 A memory may carry `occurred`: when what it tells of happened, read in code from its text when it

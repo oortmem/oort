@@ -152,8 +152,8 @@ export interface Pose {
 }
 
 /**
- * Where a memory is (spatial memory, 0.9.0 or newer). Local mode only until Oort Cloud holds
- * places: in cloud mode a place is refused (`OortRefusedError`, reason `local-only`).
+ * Where a memory is (spatial memory): 0.9.0 or newer locally, after 0.10.0 in Oort Cloud, with
+ * the same rules in both modes.
  */
 export interface Place {
   /** A place path, root first, whole segments: `site:hq/floor:2/room:B/shelf:B3`. */
@@ -658,10 +658,14 @@ export interface RecallOptions {
   inferTime?: boolean;
   /**
    * Only memories whose place path contains this path as whole segments (`room:B` keeps
-   * `site:hq/room:B/shelf:B3`, never `room:B2`). 0.9.0 or newer; local mode only.
+   * `site:hq/room:B/shelf:B3`, never `room:B2`). 0.9.0 or newer; in Oort Cloud after 0.10.0,
+   * reading only your own memories (never a Constellation).
    */
   within?: string;
-  /** Only memories within a radius on the same map and frame. 0.9.0 or newer; local mode only. */
+  /**
+   * Only memories within a radius on the same map and frame. 0.9.0 or newer; in Oort Cloud after
+   * 0.10.0, where a region holding more than 2,000 placed memories is refused (`OortUsageError`).
+   */
   near?: NearQuery;
   signal?: AbortSignal;
 }
@@ -676,7 +680,7 @@ export interface Turn {
   sessionId?: string;
   /** At most 128 characters; deduplicated by Oort Cloud only. */
   turnRef?: string;
-  /** Where this turn happened: the memories it writes carry it. 0.9.0 or newer; local mode only. */
+  /** Where this turn happened: the memories it writes carry it. 0.9.0 or newer (Oort Cloud: after 0.10.0). */
   place?: Place;
 }
 

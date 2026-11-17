@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fakeCloud, type FakeCloud } from '../../packages/cli/test/helpers/fake-cloud.js';
 import { fakeAdapters } from '../../packages/cli/test/helpers/sdk-fakes.js';
+import { writeCloudSettings } from '../../packages/cli/src/cloud.js';
 import type { Oort, OortOptions } from '../../packages/cli/src/sdk/types.js';
 
 type CreateWith = (options: OortOptions, internals: object) => Promise<Oort>;
@@ -19,6 +20,11 @@ export interface Harness {
   cloud: FakeCloud;
   /** Cloud mode: false leaves `OORT_API_KEY` unset. */
   withKey: boolean;
+  /**
+   * The mode an example's `auto` resolves to: local (no cloud.json in the home) unless a test
+   * sets cloud (a home whose cloud.json says cloud, as after `oort cloud use`).
+   */
+  autoMode: 'local' | 'cloud';
   /** Every option object an example passed to `createOort`. */
   calls: OortOptions[];
   create(options: OortOptions | undefined, createWith: CreateWith): Promise<Oort>;
@@ -34,6 +40,7 @@ export function newHarness(): Harness {
     home: path.join(root, 'home'),
     cloud: fakeCloud(key),
     withKey: true,
+    autoMode: 'local',
     calls: [],
     async create(options = {}, createWith) {
       h.calls.push(options);
@@ -44,6 +51,13 @@ export function newHarness(): Harness {
       if (options.mode === 'cloud') {
         if (h.withKey) env['OORT_API_KEY'] = key;
         return createWith({ ...options, cwd: root, env, fetch: h.cloud.fetch }, {});
+      }
+      if ((options.mode ?? 'auto') === 'auto' && h.autoMode === 'cloud') {
+        // As after `oort cloud use`: the home's cloud.json says cloud, so auto resolves to it.
+        const home = path.join(root, 'cloud-home');
+        writeCloudSettings(home, { store: 'cloud' });
+        if (h.withKey) env['OORT_API_KEY'] = key;
+        return createWith({ ...options, home, cwd: root, env, fetch: h.cloud.fetch }, {});
       }
       return createWith({ ...options, home: h.home, cwd: root, env }, { adapters: fakeAdapters() });
     },
