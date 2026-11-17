@@ -263,14 +263,16 @@ export const SPATIAL_NOT_APPLIED =
 
 /**
  * A spatial recall's answer from Oort Cloud, closed on this side too: refused unless Oort Cloud
- * says it applied a filter (`spatial`), then cut to the memories in the caller's own Planet
- * that match `filter` by core's rules. The answer reports `filter`, the one this side applied.
+ * says it applied a filter (`spatial`), then cut to the caller's own memories (never a Constellation's
+ * or a Galaxy's) that match `filter` by core's rules. The answer reports `filter`, the one this side applied.
  */
 export function spatialFromCloud(r: RecallResult, filter: SpatialFilter): RecallResult {
   if (r.spatial === undefined) throw new Refusal(SPATIAL_NOT_APPLIED);
-  const ownPlanet = (m: RecallResult['memories'][number]): boolean => {
+  // Yours: your Planet and your agents' Stars, Orbits and Flybys. A Constellation or a Galaxy
+  // (both level `hive`) is shared, and so is a memory whose address cannot be read.
+  const yours = (m: RecallResult['memories'][number]): boolean => {
     try {
-      return addressOf(m).level === 'user' && (m.origin === undefined || m.origin.level === 'user');
+      return addressOf(m).level !== 'hive' && m.origin?.level !== 'hive';
     } catch {
       return false;
     }
@@ -278,7 +280,7 @@ export function spatialFromCloud(r: RecallResult, filter: SpatialFilter): Recall
   return {
     ...r,
     memories: r.memories
-      .filter((m) => ownPlanet(m) && matchesSpatial(m, filter))
+      .filter((m) => yours(m) && matchesSpatial(m, filter))
       .map((m) => {
         // The place path and distance as this side measures them, never as sent.
         const { placePath: _p, distanceM: _d, ...e } = m.explanation;

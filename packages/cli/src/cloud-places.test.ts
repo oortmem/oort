@@ -454,6 +454,82 @@ describe('a spatial recall Oort Cloud answers wrongly', () => {
   });
 });
 
+describe("a spatial recall in Oort Cloud keeps your agents' memories", () => {
+  // Oort Cloud reads your own grant: your Planet, and the Stars of your agents.
+  const STAR_TEXT = 'The spare toolbox is on shelf B3.';
+  const addStar = (a: Answer) => ({
+    ...a,
+    memories: [
+      ...a.memories,
+      sentMemory(STAR_TEXT, B3, {
+        scope: { orgId: 'acct:a1', customerId: '', agentId: 'robot-1' },
+        address: { level: 'agent', orgId: 'acct:a1', agentId: 'robot-1' },
+        origin: {
+          level: 'agent',
+          space: 'Star',
+          node: 'Star robot-1',
+          from: 'from Star robot-1',
+          home: false,
+          author: 'robot-1',
+        },
+      }),
+    ],
+  });
+
+  function seeded() {
+    const e = setup();
+    const own = fakeMemory({ text: 'The blue toolbox is on shelf B3.', place: B3 });
+    e.cloud.memories.set(own.id, own);
+    e.cloud.tamperRecall = addStar;
+    return e;
+  }
+  const texts = ['The blue toolbox is on shelf B3.', STAR_TEXT];
+
+  it('cloud-places.sdk-keeps-a-star-memory-in-range', async () => {
+    const e = seeded();
+    const oort = await e.sdk();
+    for (const opts of [
+      { within: 'room:B' },
+      { near: { mapId: 'hq', pose: { x: 12, y: 0 }, radius: 3 } },
+    ]) {
+      const r = await oort.recall('toolbox', opts);
+      expect(r.memories.map((m) => m.text)).toEqual(texts);
+    }
+    await oort.close();
+  });
+
+  it('cloud-places.cli-keeps-a-star-memory-in-range', async () => {
+    const e = seeded();
+    for (const flags of [
+      ['--within', 'room:B'],
+      ['--near', '12,0', '--radius', '3', '--map', 'hq'],
+    ]) {
+      const r = await e.run(['recall', 'toolbox', ...flags, '--json']);
+      expect(r.code, r.io.stderr).toBe(0);
+      const out = data<{ memories: { text: string }[] }>(r.io.stdout);
+      expect(out.memories.map((m) => m.text)).toEqual(texts);
+    }
+  });
+
+  it('cloud-places.mcp-keeps-a-star-memory-in-range', async () => {
+    const e = seeded();
+    const w = await realWire(e.cwd, {
+      env: e.env,
+      keychain: async () => undefined,
+      fetch: e.cloud.fetch,
+    });
+    const backend = cloudBackend({ wired: w, client: w.cloud! });
+    for (const args of [
+      { within: 'room:B' },
+      { near: { map_id: 'hq', pose: { x: 12, y: 0 }, radius: 3 } },
+    ]) {
+      const r = await backend.recall({ query: 'toolbox', limit: 5, ...args });
+      expect(r.memories.map((m) => m.text)).toEqual(texts);
+    }
+    await w.close();
+  });
+});
+
 describe('the MCP server with places in Oort Cloud', () => {
   it('cloud-places.mcp-remembers-a-place-and-recalls-within-and-near-it', async () => {
     const e = setup();
