@@ -102,15 +102,54 @@ for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `
 `lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of), `within` and
 `near` (spatial memory, below) and `signal`.
 `as-of` needs `asOf`, `known-at` needs `knownAt`, and `asOf` together with `knownAt` is a usage
-error.
+error. Oort keeps a fact that changed as history (superseded) and one that was wrong as never true
+(corrected), so `current` is what is true now, `asOf` what was true then, `history` every version,
+and `knownAt` what Oort believed then. A date in a fact ("until 31 March", "starting 1 April")
+sets when it holds, read against the turn's `at`.
+
+<!-- example: examples/src/time.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A support agent's memory of one customer. Each turn carries when it was said (`at`), and a date
+// in the fact ("until", "starting") sets when the fact holds.
+await using oort = await createOort({ mode: 'local' });
+
+await oort.observe({
+  user: 'Acme is on the Starter plan until 31 March 2026.',
+  assistant: 'Noted.',
+  at: '2026-03-02T09:00:00Z',
+});
+await oort.observe({
+  user: 'Acme is on the Business plan starting 1 April 2026.',
+  assistant: 'Noted.',
+  at: '2026-03-30T09:00:00Z',
+});
+
+const question = 'Which plan is Acme on?';
+
+// What is true now: the Starter fact has ended, so only the Business plan comes back.
+const now = await oort.recall(question);
+console.log(now.memories.map((m) => m.text));
+
+// What was true on a date: `asOf` reads the facts that held then.
+const march = await oort.recall(question, { asOf: '2026-03-15' });
+console.log(march.memories.map((m) => m.text));
+
+// Every version, each with the dates it held. The ended fact is kept as history.
+const history = await oort.recall(question, { mode: 'history' });
+for (const m of history.memories) console.log(m.validFrom, m.validTo, m.text);
+```
 
 **A `Turn`** for `observe` is `{ user, assistant }`, plus optional `tools` (tool-call summaries),
 `at`, `sessionId`, `turnRef` and `place`. `turnRef` is deduplicated by Oort Cloud only (it answers
 `duplicate: true`); locally a retry may write twice.
 
-**Spatial memory** (0.9.0 or newer, local mode only). `remember(facts, { place })` and a turn's
-`place` tag memories with where they are: `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?,
-geo?, sigma? }`, with a place path such as `site:hq/room:B/shelf:B3`, map coordinates in metres
+**Spatial memory** (0.9.0 or newer, local mode only). A memory can carry where it was observed,
+and recall can keep only the memories in a place or near a point: a robot asks which toolboxes
+are in room B. `remember(facts, { place })` and a turn's `place` tag memories with where they
+are: `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?, geo?, sigma? }`, with a place path such as `site:hq/room:B/shelf:B3`, map coordinates in metres
 (`pose: { x, y, z?, yaw? }`, `mapId` required with it), or both. `recall(q, { within: 'room:B' })`
 keeps memories whose path contains those whole segments; `near: { mapId, frame?, pose, radius }`
 keeps those within `radius` metres on the same map and frame. Both filter before ranking and
@@ -258,9 +297,9 @@ console.log(memories.map((m) => m.text).join('\n'));
 Not in 0.10.0: `link`, `unlink`, `Explanation.links` and `why.via` come in the release after it.
 On 0.10.0, do not call them.
 
-`link(from, to)` says two memories belong together; `unlink` removes it, or blocks a pair that was
-not linked. Both memories must be ones the handle writes, in the same Planet or Star: any other
-pair rejects with `OortNotFoundError`, like a missing id. From the SDK a link is always asserted
+`link(from, to)` says two memories belong together, so a recall that finds one can bring the
+other along; `unlink` removes it, or blocks a pair that was not linked. Both memories must be
+ones the handle writes, in the same Planet or Star: any other pair rejects with `OortNotFoundError`, like a missing id. From the SDK a link is always asserted
 by `agent`; `unlink` rejects (`refused`, `asserted-by-user`) for a link confirmed at a terminal
 with `oort link`. A `full` recall follows a link confirmed at a terminal for one hop;
 links your code writes are followed once the home config sets `recall.links.enabled`. A memory a

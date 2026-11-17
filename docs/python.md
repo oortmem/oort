@@ -134,6 +134,39 @@ know: a minor release may add some.
 An unknown keyword argument is Python's own `TypeError`, raised before any I/O; an unknown key in
 a turn mapping is an `OortUsageError`. Neither is ever dropped silently.
 
+### Time
+
+A fact that changed is kept as history, so `recall` can say what is true now (the default), what
+was true on a date (`as_of`), every version (`mode="history"`), or what Oort believed on a date
+(`known_at`). A date in a fact ("until 31 March", "starting 1 April") sets when it holds, read
+against the turn's `at`. The rules are the TypeScript SDK's
+([Time](sdk.md#time-what-was-true-and-when)), and recalled memories carry `valid_from` and
+`valid_to`.
+
+<!-- example: examples/python/time.py -->
+
+```python
+from oortmem import Oort
+
+# A support agent's memory of one customer. Each turn carries when it was said (`at`), and a date
+# in the fact ("until", "starting") sets when the fact holds.
+with Oort(mode="local") as oort:
+    oort.observe(user="Acme is on the Starter plan until 31 March 2026.", assistant="Noted.", at="2026-03-02T09:00:00Z")
+    oort.observe(user="Acme is on the Business plan starting 1 April 2026.", assistant="Noted.", at="2026-03-30T09:00:00Z")
+
+    question = "Which plan is Acme on?"
+
+    # What is true now: the Starter fact has ended, so only the Business plan comes back.
+    print([m.text for m in oort.recall(question).memories])
+
+    # What was true on a date: `as_of` reads the facts that held then.
+    print([m.text for m in oort.recall(question, as_of="2026-03-15").memories])
+
+    # Every version, each with the dates it held. The ended fact is kept as history.
+    for m in oort.recall(question, mode="history").memories:
+        print(m.valid_from, m.valid_to, m.text)
+```
+
 ### Spatial memory
 
 In 0.9.0 or newer, `remember(..., place=...)` and `observe(..., place=...)` tag memories with where
