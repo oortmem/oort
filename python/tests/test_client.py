@@ -254,6 +254,46 @@ class LocalMode(unittest.TestCase):
         self.assertEqual(sent[-2]["within"], "room:B")
         self.assertEqual(sent[-1]["near"], {"mapId": "hq", "pose": {"x": 13, "y": 3}, "radius": 1.5})
 
+    def test_the_documented_time_example_runs(self) -> None:
+        import contextlib
+        import io
+        import runpy
+        from unittest import mock
+
+        starter = "Acme is on the Starter plan until 31 March 2026."
+        business = "Acme is on the Business plan starting 1 April 2026."
+
+        def fact(text: str, valid_from: str, valid_to) -> dict:
+            return {**RECALL["memories"][0], "text": text, "validFrom": valid_from, "validTo": valid_to}
+
+        now = [fact(business, "2026-04-01T00:00:00.000Z", None)]
+        then = [fact(starter, "2026-03-02T09:00:00.000Z", "2026-04-01T00:00:00.000Z")]
+        self.rec.answers["POST /v1/observe"] = (200, envelope({"outcome": "added", "memories": [], "counts": {}, "warnings": []}))
+        self.rec.answers["POST /v1/recall"] = [
+            (200, envelope({**RECALL, "memories": now})),
+            (200, envelope({**RECALL, "memories": then})),
+            (200, envelope({**RECALL, "memories": then + now})),
+        ]
+        example = os.path.join(os.path.dirname(HERE), "..", "examples", "python", "time.py")
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.box.env, clear=True), contextlib.redirect_stdout(out):
+            runpy.run_path(example, run_name="__main__")
+        self.assertEqual(
+            out.getvalue().splitlines(),
+            [
+                str([business]),
+                str([starter]),
+                f"2026-03-02T09:00:00.000Z 2026-04-01T00:00:00.000Z {starter}",
+                f"2026-04-01T00:00:00.000Z None {business}",
+            ],
+        )
+        observed = [r["body"] for r in self.rec.seen if r["path"] == "/v1/observe"]
+        self.assertEqual([(o["user"], o["at"]) for o in observed], [(starter, "2026-03-02T09:00:00Z"), (business, "2026-03-30T09:00:00Z")])
+        recalls = [r["body"] for r in self.rec.seen if r["path"] == "/v1/recall"]
+        self.assertNotIn("asOf", recalls[0])
+        self.assertEqual(recalls[1]["asOf"], "2026-03-15")
+        self.assertEqual(recalls[2]["mode"], "history")
+
     def test_end_users_judge_roles_and_derived_handles(self) -> None:
         self.rec.answers["GET /v1/whoami"] = (200, envelope({"mode": "local", "account": None, "agent": None, "project": None, "user": "u1", "reads": [], "writesTo": "Planet u1", "version": "0.7.0", "routes": {}}))
         with self.oort(org="acme", judge_role="expert", operator="ada") as root:

@@ -1667,8 +1667,34 @@ of its `recall` settings still apply).
 
 ### Time: recall modes
 
-Every memory has a valid time (`validFrom` to `validTo`: when the fact held in the world) and a
-transaction time (`createdAt` to `expiredAt`: when Oort believed it). A recall reads one slice:
+Facts change, and some turn out to be wrong. Oort keeps both kinds of history, so recall can
+answer what is true now, what was true on a past date, how a fact changed, and what Oort believed
+on a past date. A support agent that learns a customer moved from the Starter plan to the
+Business plan still knows which plan they were on in March.
+
+```sh
+oort recall "which plan is Acme on"                         # now
+oort recall "which plan is Acme on" --as-of 2026-03-15      # on 15 March
+oort recall "which plan is Acme on" --history               # every version
+oort recall "which plan is Acme on" --known-at 2026-03-15   # what Oort believed on 15 March
+```
+
+Every memory carries two times:
+
+- **Valid time** (`validFrom` to `validTo`) is when the fact held in the world.
+- **Transaction time** (`createdAt` to `expiredAt`) is when Oort believed it.
+
+A fact can end in two ways, and Oort records which:
+
+- **Superseded.** The situation changed. The old fact gets `validTo` (the new fact's start) and
+  `endReason: superseded`. It stays true for questions about the past.
+- **Corrected.** The old fact was wrong from the start. It gets `expiredAt` (when Oort learned)
+  and `endReason: corrected`, and the correction takes its valid interval. It never shows as
+  having been true.
+
+A fact that only gains detail is **refined** in place. Its earlier wording stays in its decisions.
+
+A recall reads one slice of these times, called its mode:
 
 | Mode | Flag | What it returns |
 | --- | --- | --- |
@@ -1677,7 +1703,26 @@ transaction time (`createdAt` to `expiredAt`: when Oort believed it). A recall r
 | `history` | `--history` | Every version of the matching facts, along the supersede chain, oldest first. Versions found only by walking the chain have `explanation.chain`. |
 | `known-at` | `--known-at <iso>` | What Oort believed at that time, including facts corrected later. A fact whose own end (or expiry) had passed by then is not shown; a fact superseded or corrected after that time is. A refined memory shows its latest wording; earlier wording is in its decisions (`refine` / `previous-text`). |
 
-Without a flag the mode comes from the query, in code (chrono-node, no model call):
+Validity is a filter: a fact outside the slice is left out. Recency only breaks ties in the
+ranking.
+
+**Dates in a fact set when it holds.** They are resolved in code against the turn's time, in the
+turn's UTC offset when its timestamp has one:
+
+- "until Friday" ends it after that Friday. An end already past ("the freeze ran until
+  yesterday") is kept: the fact is stored already ended.
+- "starting next week" or "starting Monday" starts it at the coming one, "since last Monday" at
+  the past one, and "as of", "effective" or "from" at whichever is closer within a week, else the
+  past one. "From Monday to Friday" is a schedule and sets nothing.
+- A start earlier than the fact it replaces ("since October" for a fact stored in November) still
+  makes the new fact current; the old one is closed at its own start.
+
+When the turn says "yesterday" and the writer put a day one or two off in the fact, the day is
+fixed. A date the turn states itself, or one further off, is kept and the difference is logged
+(`temporal` / `writer-date`).
+
+**The mode from the question.** Without a flag, recall reads the mode from the query, in code
+(chrono-node, no model call):
 
 - A past time with a cue ("on 2 April 2026", "in March", "yesterday", "last weekend", "two weeks
   ago", "the past two months", "last summer", "in 2023", "since March") names a range: the whole
@@ -1699,12 +1744,30 @@ Without a flag the mode comes from the query, in code (chrono-node, no model cal
 - "what did we believe … on <day>" is known-at that day.
 
 `--json` reports the view under `temporal` (`inferred: true` when it came from the query, `range`
-and `shape` when the query named a past time). If the
-store reports no view (an older Oort Cloud API), `recall` and `explain` warn on stderr that a
-requested mode may not have been applied. Validity is a filter; recency only breaks ties in the
-ranking.
+and `shape` when the query named a past time). If the store reports no view (an older Oort Cloud
+API), `recall` and `explain` warn on stderr that a requested mode may not have been applied.
+
+**Facts that go stale.** The write gate marks facts likely to change within weeks (a status, a
+current version, an owner, a deadline) as volatile. One not confirmed within
+`recall.staleAfterDays` (default 30; 0 turns it off) is injected with "(may be outdated; last
+confirmed 2mo ago)" and listed by `oort revalidate`. Confirming it in a session clears the mark.
+The gate answers this once per turn, so facts split from a multi-fact turn are not marked yet (a
+per-fact question is a follow-up).
+
+**Other languages.** The date words above are read in English only, for now. A query in another
+language ("¿qué puerto usaba auth en marzo?", "5月の時点では？") falls back to `current`, which is
+what a query without a date gets; nothing is misread. A memory written in another language gets
+no stated end or start, so "hasta el viernes" does not end the fact by itself. Numeric dates
+(`2026-11-06`) are found in any language, as keywords. In any language, `--as-of`,
+`--known-at` and `--history` (and the MCP `recall` tool's `as_of`, `known_at` and `mode`) choose
+the mode explicitly. The writer still turns a relative date in any language into an absolute
+`YYYY-MM-DD` in the fact's text. Reading dates in Spanish, Brazilian Portuguese, German, French,
+Japanese and Chinese is planned.
 
 #### How a time in the query ranks
+
+A question that names a past time ranks the memories that tell of that time higher. "Where did I
+go hiking in March?" puts the March hike first, even when other hikes match the words better.
 
 Each memory carries when what it tells of happened (`occurred`), read in code when it is stored,
 against the time of the turn that said it: "I went hiking last weekend", said on 22 May 2023, is
@@ -1751,37 +1814,6 @@ dense searches and fuses all three by reciprocal rank (k = 60):
 query with no time in it is ranked exactly as before. Recalled memories that state a time say so:
 `happened 2023-05-20 to 2023-05-21` in the prompt hook's labels, `happened` in MCP `recall`
 results.
-
-A fact can end two ways. **Superseded**: the situation changed, so the old fact gets `validTo`
-(the new fact's start) and `endReason: superseded`. **Corrected**: the old fact was wrong from the
-start, so it gets `expiredAt` (when Oort learned) and `endReason: corrected`, and the correction
-takes its valid interval. A fact that only gains detail is **refined** in place; its earlier
-wording stays in its decisions.
-
-Dates in a fact set its interval, resolved against the turn's time, in the turn's UTC offset when
-its timestamp has one:
-
-- "until Friday" ends it after that Friday. An end already past ("the freeze ran until
-  yesterday") is kept: the fact is stored already ended.
-- "starting next week" or "starting Monday" starts it at the coming one, "since last Monday" at
-  the past one, and "as of", "effective" or "from" at whichever is closer within a week, else the
-  past one. "From Monday to Friday" is a schedule and sets nothing.
-- A start earlier than the fact it replaces ("since October" for a fact stored in November) still
-  makes the new fact current; the old one is closed at its own start.
-
-When the turn says "yesterday" and the writer put a day one or two off in the fact, the day is
-fixed. A date the turn states itself, or one further off, is kept and the difference is logged
-(`temporal` / `writer-date`).
-
-**Other languages.** The date words above are read in English only, for now. A query in another
-language ("¿qué puerto usaba auth en marzo?", "5月の時点では？") falls back to `current`, which is
-what a query without a date gets; nothing is misread. A memory written in another language gets
-no stated end or start, so "hasta el viernes" does not end the fact by itself. Numeric dates
-(`2026-11-06`) are found in any language, as keywords. In any language, `--as-of`,
-`--known-at` and `--history` (and the MCP `recall` tool's `as_of`, `known_at` and `mode`) choose
-the mode explicitly. The writer still turns a relative date in any language into an absolute
-`YYYY-MM-DD` in the fact's text. Reading dates in Spanish, Brazilian Portuguese, German, French,
-Japanese and Chinese is planned (CON-110).
 
 ### Questions about two things
 
@@ -1869,14 +1901,23 @@ before. Set `recall.enumerationPerSource` to 0 to turn the spread off.
 
 ### Places: spatial memory
 
-In 0.9.0 or newer, a memory can carry where it is: a robot, a phone or anything else that knows
-its place. `oort remember` takes one, and `oort recall` and `oort explain` filter by one:
+A memory can carry where it was observed, and recall can ask what is in a place or near a point.
+A warehouse robot that remembers where each tool was seen can then ask "which toolboxes are in
+room B?" or "what is within 1.5 m of me?" and get only the memories from there. Anything else that
+knows its place, such as a phone, works the same way.
+
+Places need 0.9.0 or newer and the local store. Oort Cloud does not hold them yet: see
+**Where places are kept**, below.
+
+`oort remember` takes a place, and `oort recall` and `oort explain` filter by one:
 
 ```sh
 oort remember "The torque wrench is in drawer 4." --place site:hq/room:B/drawer:4 --pose 12,3 --map hq
 oort recall "torque wrench" --within room:B
 oort recall "toolbox" --near 13,3 --radius 1.5 --map hq
 ```
+
+**Saying where.** A place is a place path, map coordinates, or both:
 
 - **A place path** (`--place`) names where, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to
   16 segments of 1 to 64 letters (any script, with its combining marks), digits and `. _ : @ -`,
@@ -1889,33 +1930,30 @@ oort recall "toolbox" --near 13,3 --radius 1.5 --map hq
 - **Map coordinates** (`--pose x,y[,z]`, in metres, with `--map`) say where on a map. `--radius`
   gives the place a size, `--frame` a coordinate frame other than `map`. `odom` is refused:
   odometry drifts, so a fact pinned to it would end up in the wrong place.
+
+**Asking by place.** Two filters keep only the memories in a place:
+
 - **`--within room:B`** keeps memories whose place path contains `room:B` as whole segments, at
   any depth: `room:B/shelf:B3` matches, `room:B2` never does.
 - **`--near x,y[,z] --radius m --map id`** keeps memories within that many metres of the point,
   measured to the edge of the memory's place (0 inside it). Another map or frame never matches.
 
-The filters run in the store before ranking and `--limit`, together (both must hold) and with
-every [time mode](#time-recall-modes): `--within shelf:B3 --as-of 2026-11-03` is what was on that
-shelf then, and `--history` shows where a moved fact went. A memory without a place never matches
-a filter, and a recall without one is unchanged. `--json` adds each memory's `place`,
-`explanation.placePath` and `explanation.distanceM`, and the filter under `spatial`.
+The filters run in the store before ranking and `--limit`. Pass both and both must hold. They
+work with every [time mode](#time-recall-modes): `--within shelf:B3 --as-of 2026-11-03` is what
+was on that shelf then, and `--history` shows where a moved fact went. A memory without a place
+never matches a filter, and a recall without one is unchanged. `--json` adds each memory's
+`place`, `explanation.placePath` and `explanation.distanceM`, and the filter under `spatial`.
 
-A turn seen somewhere else than a memory it would reinforce adds a memory instead (decision
-`place` / `elsewhere`): the two places differ when their paths differ, or their poses are further
-apart than their combined `sigma` (a matching path where only one side has a pose is the same
-place). Deciding that a thing moved, and replacing the old place, is
-later work.
+**Seen somewhere else.** A turn seen somewhere else than a memory it would reinforce adds a memory
+instead (decision `place` / `elsewhere`). Two places differ when their paths differ, or their
+poses are further apart than their combined `sigma` (a matching path where only one side has a
+pose is the same place). Deciding that a thing moved, and replacing the old place, is later work.
 
-Places are kept by the local store (schema version 5 and newer; opening an older store adds the columns and
-a spatial index, after a `pre-v5` backup). Oort Cloud does not hold them yet: in cloud mode the
-flags are refused (`refused`, `local-only`, fix `oort cloud use --local`), and `oort cloud
-import` sends memories without their place and says how many it left out.
-
-**Volatile facts.** The write gate marks facts likely to change within weeks (a status, a current
-version, an owner, a deadline). One not confirmed within `recall.staleAfterDays` (default 30; 0
-turns it off) is injected with "(may be outdated; last confirmed 2mo ago)" and listed by `oort
-revalidate`. Confirming it in a session clears the mark. The gate answers this once per turn, so
-facts split from a multi-fact turn are not marked yet (a per-fact question is a follow-up).
+**Where places are kept.** The local store keeps them (schema version 5 and newer; opening an
+older store adds the columns and a spatial index, after a `pre-v5` backup). Oort Cloud does not
+hold them yet: in cloud mode the place flags are refused (`refused`, `local-only`, fix
+`oort cloud use --local`), and `oort cloud import` sends memories without their place and says
+how many it left out.
 
 ## Judgment memory: `oort judge`
 

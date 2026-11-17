@@ -260,6 +260,20 @@ describe('SDK examples (run)', () => {
     await oort.close();
   });
 
+  it('time: a fact with an end date, then its successor: now, as of a date, and the history', async () => {
+    const { out } = await runExample('time.ts');
+    const starter = 'Acme is on the Starter plan until 31 March 2026.';
+    const business = 'Acme is on the Business plan starting 1 April 2026.';
+    // Now: only the plan that holds today. On 15 March: only the plan that held then.
+    expect(out.slice(0, 2)).toEqual([JSON.stringify([business]), JSON.stringify([starter])]);
+    // The history keeps both, each with when it held: the Starter plan ends as the Business one
+    // starts, on the day the turns named, not on the day they were said.
+    expect(out.slice(2).sort()).toEqual([
+      `2026-03-02T09:00:00.000Z 2026-04-01T00:00:00.000Z ${starter}`,
+      `2026-04-01T00:00:00.000Z null ${business}`,
+    ]);
+  });
+
   describe('errors', () => {
     it('retries a rate limit after Retry-After, then saves', async () => {
       h.cloud.fail = { 'POST /v1/observe': { status: 429, code: 'rate_limit', retryAfter: '1' } };

@@ -1123,13 +1123,73 @@ console.log(result.finalOutput);
 
 Any MCP-capable framework can also use `oort mcp` with no code at all.
 
+## Time: what was true, and when
+
+Facts change, and some turn out to be wrong. Oort keeps the old version instead of overwriting
+it, so your code can ask what is true now, what was true on a past date, how a fact changed, and
+what Oort believed on a past date. A support agent that learns a customer moved to another plan
+can still say which plan they were on in March.
+
+<!-- example: examples/src/time.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A support agent's memory of one customer. Each turn carries when it was said (`at`), and a date
+// in the fact ("until", "starting") sets when the fact holds.
+await using oort = await createOort({ mode: 'local' });
+
+await oort.observe({
+  user: 'Acme is on the Starter plan until 31 March 2026.',
+  assistant: 'Noted.',
+  at: '2026-03-02T09:00:00Z',
+});
+await oort.observe({
+  user: 'Acme is on the Business plan starting 1 April 2026.',
+  assistant: 'Noted.',
+  at: '2026-03-30T09:00:00Z',
+});
+
+const question = 'Which plan is Acme on?';
+
+// What is true now: the Starter fact has ended, so only the Business plan comes back.
+const now = await oort.recall(question);
+console.log(now.memories.map((m) => m.text));
+
+// What was true on a date: `asOf` reads the facts that held then.
+const march = await oort.recall(question, { asOf: '2026-03-15' });
+console.log(march.memories.map((m) => m.text));
+
+// Every version, each with the dates it held. The ended fact is kept as history.
+const history = await oort.recall(question, { mode: 'history' });
+for (const m of history.memories) console.log(m.validFrom, m.validTo, m.text);
+```
+
+- **Two times.** Each memory has a valid time, `validFrom` to `validTo`: when the fact held in the
+  world. It also has a transaction time, from `recordedAt`: when Oort believed it. A recall reads
+  one slice of them.
+- **Two ways a fact ends.** When the situation changes, the old fact is **superseded**: it gets
+  `validTo`, its `status` becomes `superseded`, and it still answers questions about the past.
+  When a fact was wrong from the start, it is **corrected**: its `status` becomes `corrected`, and
+  it never shows as having been true. A fact whose own end date has passed, with nothing replacing
+  it, is `expired`. A fact that only gains detail is refined in place.
+- **Dates in a fact** set when it holds: "until 31 March" ends it, "starting 1 April" starts it.
+  They are read in code against the turn's `at` (now, when a turn has none).
+- **The modes.** `current` (the default) is what is true now. `asOf` is what was true at that
+  time, using everything learned since. `mode: 'history'` returns every version of the matching
+  facts. `knownAt` is what Oort believed at that time, corrected facts included. Without a mode,
+  `inferTime` reads one from the query, as the CLI does. The rules for each are in
+  [Time: recall modes](cli.md#time-recall-modes).
+
 ## Spatial memory
 
-In 0.9.0 or newer, a memory can carry where it is, and recall can ask for what is in a place or
-near a point. It is for robots and anything else that knows where it is: a fact remembered with a
-place keeps it, and `within` and `near` keep only the memories there, before ranking and before
-`limit` is taken. The local engine holds places; Oort Cloud does not yet, so in cloud mode
-`within`, `near` and `place` are refused before anything is sent (`OortRefusedError`, reason
+A memory can carry where it was observed, and recall can ask what is in a place or near a point.
+A robot that remembers where it saw each tool can then ask which toolboxes are in room B, or what
+is within 1.5 m of it, and get only the memories from there. `within` and `near` filter before
+ranking and before `limit` is taken.
+
+Places need 0.9.0 or newer and the local engine. Oort Cloud does not hold them yet, so in cloud
+mode `within`, `near` and `place` are refused before anything is sent (`OortRefusedError`, reason
 `local-only`, fix `oort cloud use --local`).
 
 <!-- example: examples/src/spatial.ts -->
@@ -1186,36 +1246,41 @@ for (const m of near.memories) console.log(m.why.distanceM?.toFixed(2), '|', m.t
 It needs a `nodeId`, a `pose` or `geo`. An unknown field, a value out of range or a bad path is a
 usage error naming the field, never its value.
 
-**`within: 'room:B'`** keeps memories whose place path contains `room:B` as whole segments, at
-any depth: `site:hq/room:B` and `site:hq/room:B/shelf:B3`, never `room:B2`. Nothing in the path
-is a wildcard.
+**Asking by place.**
 
-**`near: { mapId, frame?, pose: { x, y, z? }, radius }`** keeps memories within `radius` metres of
-`pose`, measured to the memory's region (0 inside it). Coordinates on another map or in another
-frame are never compared, so they never match. `z` counts only when both sides have it.
+- **`within: 'room:B'`** keeps memories whose place path contains `room:B` as whole segments, at
+  any depth: `site:hq/room:B` and `site:hq/room:B/shelf:B3`, never `room:B2`. Nothing in the path
+  is a wildcard.
+- **`near: { mapId, frame?, pose: { x, y, z? }, radius }`** keeps memories within `radius` metres
+  of `pose`, measured to the memory's region (0 inside it). Coordinates on another map or in
+  another frame are never compared, so they never match. `z` counts only when both sides have it.
+- **Both** must hold when you pass both. They compose with every time mode: `asOf` reads where
+  things were then, and `history` returns each matching fact with the rest of its supersede chain
+  (where it moved to, too).
+- Memories without a place are unaffected by a recall that names neither, and never match one
+  that does. Ranking is unchanged.
 
 Each memory a spatial recall returns carries its `place`, and its `why` adds `placePath` and, with
 `near`, `distanceM` (metres; 0 inside the region).
 
-**Both** must hold when you pass both. They compose with every time mode: `asOf` reads where things
-were then, and `history` returns each matching fact with the rest of its supersede chain (where it
-moved to, too). Memories without a place are unaffected by a recall that names neither, and never
-match one that does. Ranking is unchanged.
-
 **Writing.** `remember(facts, { place })` tags every fact of the call; `observe({ ..., place })`
-tags the memories the turn writes. A fact that supersedes or corrects another gets the turn's place
-only, never the old one's. A refinement keeps its place unless the turn gives one. A turn seen
-somewhere else than a memory it would reinforce adds a memory instead (decision `place` /
-`elsewhere`), within the two places' `sigma`; deciding that a thing moved is a later release's
+tags the memories the turn writes. A fact that supersedes or corrects another gets the turn's
+place only, never the old one's. A refinement keeps its place unless the turn gives one. A turn
+seen somewhere else than a memory it would reinforce adds a memory instead (decision `place` /
+`elsewhere`), within the two places' `sigma`. Deciding that a thing moved is a later release's
 job.
 
 ## Memory links
 
-A link says that two memories belong together (local mode). It holds no text:
-two ids, who asserted it and when. A recall follows a link for one hop, under the rules in
-[Following links at recall](cli.md#following-links-at-recall): by default only links confirmed at
-a terminal with `oort link`, and only at `speed: 'full'`; links your code writes with `link()`
-are followed once `recall.links.enabled` is set in the home config.
+A link says that two memories belong together, so that recall can bring one along when it finds
+the other. A support agent whose recall finds "the billing service deploys on Fridays" can bring
+along "Friday deploys wait for the change freeze to end", which the question alone might miss.
+
+Links work in local mode. A link holds no text: two ids, who asserted it and when. A recall
+follows a link for one hop, under the rules in
+[Following links at recall](cli.md#following-links-at-recall). By default it follows only links
+confirmed at a terminal with `oort link`, and only at `speed: 'full'`. Links your code writes with
+`link()` are followed once `recall.links.enabled` is set in the home config.
 
 <!-- example: examples/src/links.ts -->
 
