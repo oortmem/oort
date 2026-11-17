@@ -1191,12 +1191,16 @@ ranking and before `limit` is taken.
 Places need 0.9.0 or newer on the local engine, and a version after 0.10.0 in Oort Cloud. The same
 calls, options and checks work in both modes. In Oort Cloud:
 
-- A spatial recall reads only your own memories, never a Constellation.
+- A spatial recall reads only your own memories, never a Constellation. The SDK checks the answer
+  too: it keeps only your own memories that match the filter, and refuses the recall
+  (`OortUsageError`) if Oort Cloud does not confirm it applied the filter.
 - A `near` whose region holds more than 2,000 placed memories you can read (after `within`) is
-  refused with `OortUsageError` (reason `invalid-argument`) and Oort Cloud's message, which asks
-  for a smaller radius or a `within`. The local engine has no such limit.
-- A place or filter Oort Cloud refuses is the same `OortUsageError` local mode gives, with Oort
-  Cloud's message. The SDK checks every place before it is sent, so this is rare.
+  refused with `OortUsageError` (reason `invalid-argument`). The message starts with "Oort Cloud
+  refused the place or the spatial filter (HTTP 400):" and goes on with Oort Cloud's reason, which
+  asks for a smaller radius or a `within`. The local engine has no such limit.
+- A place or filter Oort Cloud refuses is the same `OortUsageError` local mode gives, with the
+  same start and Oort Cloud's reason. The SDK checks every place before it is sent, so this is
+  rare.
 - `oort cloud import` now uploads each memory with its place. It skips memories already in Oort
   Cloud, so one uploaded by an earlier version stays there without its place.
 

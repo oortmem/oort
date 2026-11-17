@@ -197,7 +197,7 @@
   },
   {
     "id": "spatial.near-over-the-oort-cloud-limit-is-a-usage-error",
-    "description": "Oort Cloud answers a near whose region holds more placed memories than places.limits.nearCandidates (after within) with 400 bad_place; the SDK passes its message on unchanged.",
+    "description": "Oort Cloud answers a near whose region holds more placed memories than places.limits.nearCandidates (after within) with 400 bad_place; the SDK passes its message on after a fixed prefix.",
     "transports": ["cloud"],
     "cloud": {
       "memories": 2001,
@@ -231,7 +231,7 @@
   },
   {
     "id": "spatial.a-place-oort-cloud-refuses-is-a-usage-error",
-    "description": "A 400 bad_place from Oort Cloud is the usage error local mode gives a place core's rules refuse, with Oort Cloud's message.",
+    "description": "A 400 bad_place from Oort Cloud is the usage error local mode gives a place core's rules refuse, with Oort Cloud's message after a fixed prefix.",
     "transports": ["cloud"],
     "steps": [
       {
@@ -243,7 +243,7 @@
             "code": "usage",
             "reason": "invalid-argument",
             "status": 400,
-            "message": "forced 400"
+            "message": "Oort Cloud refused the place or the spatial filter (HTTP 400): forced 400"
           }
         }
       }

@@ -161,7 +161,7 @@ const everywhereNeedsPerson = (id: string): string =>
 const commandSafeId = (id: string): string => (/^[A-Za-z0-9-]{1,64}$/.test(id) ? id : '<id>');
 
 /**
- * The tool error for a spatial argument on a backend without places (CON-84): refused, never
+ * The tool error for a spatial argument on a backend without places: refused, never
  * stripped, so the model never believes a recall was filtered by place or a place was stored.
  * Oort's own backends (the local store and Oort Cloud) both hold places.
  */

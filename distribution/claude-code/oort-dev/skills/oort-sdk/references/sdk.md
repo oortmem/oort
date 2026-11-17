@@ -155,9 +155,11 @@ keeps memories whose path contains those whole segments; `near: { mapId, frame?,
 keeps those within `radius` metres on the same map and frame. Both filter before ranking and
 `limit`, and compose with the time modes. Recalled memories carry `place`, `why.placePath` and
 `why.distanceM`. `frame: 'odom'` is refused. Oort Cloud takes all three after 0.10.0, with the
-same checks: a spatial recall there reads only your own memories (never a Constellation), and a
-`near` whose region holds more than 2,000 placed memories is an `OortUsageError` (reason
-`invalid-argument`) with Oort Cloud's message, asking for a smaller radius or a `within`. In
+same checks: a spatial recall there reads only your own memories (never a Constellation), the
+SDK keeps only your own memories that match the filter and refuses the recall if Oort Cloud does
+not confirm it applied the filter, and a `near` whose region holds more than 2,000 placed
+memories is an `OortUsageError` (reason `invalid-argument`) whose message gives Oort Cloud's
+reason, asking for a smaller radius or a `within`. In
 0.10.0 and older, cloud mode refuses them (`refused`, `local-only`) before anything is sent.
 
 <!-- example: examples/src/spatial.ts -->

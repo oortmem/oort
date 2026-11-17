@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createKeychain } from './keychain.js';
 import { cloudBackend } from './mcp.js';
 import { runCli } from './program.js';
+import { SPATIAL_NOT_APPLIED } from './engine/recall.js';
 import { rememberTurnRef } from './remember.js';
 import { createOortWith } from './sdk/create.js';
 import { OortUsageError } from './sdk/errors.js';
@@ -200,6 +201,13 @@ describe('rememberTurnRef and places', () => {
     expect(ref({ geo: { lat: 59, lon: 18 } })).not.toBe(ref({ geo: { lat: 59, lon: 19 } }));
     expect(ref({ geo: { lat: 59, lon: 18 } })).not.toBe(ref());
   });
+
+  it('cloud-places.turn-ref-a-fact-cannot-pose-as-a-place', () => {
+    // A fact ending in what looks like a place is not that fact at that place.
+    const room = { nodeId: 'site:hq/room:B' };
+    const posing = rememberTurnRef('X\n{"nodeId":"site:hq/room:B"}', undefined, 'p1', at);
+    expect(posing).not.toBe(rememberTurnRef('X', undefined, 'p1', at, room));
+  });
 });
 
 describe('the SDK with places in Oort Cloud', () => {
@@ -256,11 +264,15 @@ describe('the SDK with places in Oort Cloud', () => {
     const oort = await e.sdk();
     const err = await oort.remember('x', { place: B3 }).catch((x: unknown) => x);
     expect(err).toBeInstanceOf(OortUsageError);
-    expect(err).toMatchObject({ reason: 'invalid-argument', status: 400, message: 'forced 400' });
+    expect(err).toMatchObject({
+      reason: 'invalid-argument',
+      status: 400,
+      message: 'Oort Cloud refused the place or the spatial filter (HTTP 400): forced 400',
+    });
     await oort.close();
   });
 
-  it('cloud-places.sdk-near-over-the-limit-surfaces-the-message-unchanged', async () => {
+  it('cloud-places.sdk-near-over-the-limit-surfaces-the-message-oort-cloud-gives', async () => {
     const e = setup();
     seedPlaced(e.cloud, CONTRACT.places.limits.nearCandidates + 1);
     const oort = await e.sdk();
@@ -268,7 +280,10 @@ describe('the SDK with places in Oort Cloud', () => {
       .recall('crate', { near: { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 1 } })
       .catch((x: unknown) => x);
     expect(err).toBeInstanceOf(OortUsageError);
-    expect(err).toMatchObject({ reason: 'invalid-argument', message: NEAR_LIMIT_MESSAGE });
+    expect(err).toMatchObject({
+      reason: 'invalid-argument',
+      message: `Oort Cloud refused the place or the spatial filter (HTTP 400): ${NEAR_LIMIT_MESSAGE}`,
+    });
     // Exactly at the limit is answered.
     e.cloud.memories.delete([...e.cloud.memories.keys()][0]!);
     const ok = await oort.recall('crate', {
@@ -294,6 +309,148 @@ describe('the SDK with places in Oort Cloud', () => {
     const one = await oort.explain(bad.id);
     expect(one.memory).not.toHaveProperty('place');
     await oort.close();
+  });
+});
+
+/** A recall answer's memory, as Oort Cloud would send it, at `place`. */
+function sentMemory(
+  text: string,
+  place: Record<string, unknown>,
+  over: Record<string, unknown> = {},
+) {
+  return {
+    ...fakeMemory({ text, place }),
+    ...over,
+    explanation: { fused: 1, rrf: 1, coverage: 1, activation: 0, hydrated: false },
+  };
+}
+
+type Answer = { memories: Record<string, unknown>[]; spatial?: unknown };
+
+/** Three ways an Oort Cloud could answer a spatial recall wrongly. */
+const WRONG: [string, (a: Answer) => unknown, 'refused' | 'filtered'][] = [
+  ['no spatial echo', ({ spatial: _s, ...a }) => a, 'refused'],
+  [
+    'a memory outside the area',
+    (a) => ({
+      ...a,
+      memories: [
+        ...a.memories,
+        sentMemory('The red toolbox is in room Z.', {
+          nodeId: 'site:hq/room:Z',
+          mapId: 'hq',
+          pose: { x: 500, y: 0 },
+        }),
+      ],
+    }),
+    'filtered',
+  ],
+  [
+    'a memory from a Constellation',
+    (a) => ({
+      ...a,
+      memories: [
+        ...a.memories,
+        sentMemory('The shared toolbox is on shelf B3.', B3, {
+          address: { level: 'hive', orgId: 'org:g1', hiveId: 'c1' },
+          origin: {
+            level: 'hive',
+            space: 'Constellation',
+            node: 'Constellation Ops',
+            from: 'from a Constellation',
+            home: false,
+            author: 'default',
+          },
+        }),
+      ],
+    }),
+    'filtered',
+  ],
+];
+
+describe('a spatial recall Oort Cloud answers wrongly', () => {
+  const near = { mapId: 'hq', pose: { x: 12, y: 0 }, radius: 3 };
+
+  async function seeded() {
+    const e = setup();
+    const own = fakeMemory({ text: 'The blue toolbox is on shelf B3.', place: B3 });
+    e.cloud.memories.set(own.id, own);
+    return { e, own };
+  }
+
+  it.each(WRONG)('cloud-places.sdk-%s', async (_name, tamper, outcome) => {
+    const { e, own } = await seeded();
+    e.cloud.tamperRecall = tamper;
+    const oort = await e.sdk();
+    for (const opts of [{ within: 'room:B' }, { near }]) {
+      const r = oort.recall('toolbox', opts);
+      if (outcome === 'refused') {
+        const err = await r.catch((x: unknown) => x);
+        expect(err).toBeInstanceOf(OortUsageError);
+        expect((err as Error).message).toBe(SPATIAL_NOT_APPLIED);
+      } else {
+        const ok = await r;
+        expect(ok.memories.map((m) => m.id)).toEqual([own.id]);
+      }
+    }
+    await oort.close();
+  });
+
+  it.each(WRONG)('cloud-places.cli-%s', async (_name, tamper, outcome) => {
+    const { e, own } = await seeded();
+    e.cloud.tamperRecall = tamper;
+    for (const flags of [
+      ['--within', 'room:B'],
+      ['--near', '12,0', '--radius', '3', '--map', 'hq'],
+    ]) {
+      const r = await e.run(['recall', 'toolbox', ...flags, '--json']);
+      if (outcome === 'refused') {
+        expect(r.code).toBe(2);
+        expect(r.io.stderr).toContain(SPATIAL_NOT_APPLIED);
+        expect(JSON.parse(r.io.stdout)).toMatchObject({ ok: false, error: { code: 'usage' } });
+        expect(r.io.stdout).not.toContain('toolbox');
+      } else {
+        expect(r.code, r.io.stderr).toBe(0);
+        const ids = data<{ memories: { id: string }[] }>(r.io.stdout).memories.map((m) => m.id);
+        expect(ids).toEqual([own.id]);
+      }
+    }
+  });
+
+  it('cloud-places.cli-json-leaves-out-a-spatial-echo-core-refuses', async () => {
+    const { e, own } = await seeded();
+    e.cloud.tamperRecall = (a) => ({ ...a, spatial: { within: 'a//b' } });
+    for (const cmd of ['recall', 'explain']) {
+      const r = await e.run([cmd, 'toolbox', '--json']);
+      expect(r.code, r.io.stderr).toBe(0);
+      const out = data<{ memories: { id: string }[] }>(r.io.stdout);
+      expect(out.memories.map((m) => m.id)).toEqual([own.id]);
+      expect(out).not.toHaveProperty('spatial');
+    }
+  });
+
+  it.each(WRONG)('cloud-places.mcp-%s', async (_name, tamper, outcome) => {
+    const { e } = await seeded();
+    e.cloud.tamperRecall = tamper;
+    const w = await realWire(e.cwd, {
+      env: e.env,
+      keychain: async () => undefined,
+      fetch: e.cloud.fetch,
+    });
+    const backend = cloudBackend({ wired: w, client: w.cloud! });
+    for (const args of [
+      { within: 'room:B' },
+      { near: { map_id: 'hq', pose: { x: 12, y: 0 }, radius: 3 } },
+    ]) {
+      const r = backend.recall({ query: 'toolbox', limit: 5, ...args });
+      if (outcome === 'refused') {
+        await expect(r).rejects.toThrow(SPATIAL_NOT_APPLIED);
+      } else {
+        const ok = await r;
+        expect(ok.memories.map((m) => m.text)).toEqual(['The blue toolbox is on shelf B3.']);
+      }
+    }
+    await w.close();
   });
 });
 

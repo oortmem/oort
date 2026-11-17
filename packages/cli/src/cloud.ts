@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import {
   checkPlace,
   checkPlacePath,
+  checkSpatialFilter,
   type IncludeLevel,
   type Memory,
   type NearQuery,
@@ -206,8 +207,10 @@ function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): stri
     case 'end-users-unsupported':
       return status === 404 ? END_USERS_NOT_OFFERED : END_USERS_UNSUPPORTED;
     case 'bad-place':
-      // Core's own words, naming the field and never its value, or the near limit's: as they are.
-      return api ?? `Oort Cloud refused the place or the spatial filter (HTTP ${status}).`;
+      // Core's own words (naming the field, never its value) or the near limit's, after a prefix.
+      return api === undefined || api.trim() === ''
+        ? `Oort Cloud refused the place or the spatial filter (HTTP ${status}).`
+        : `Oort Cloud refused the place or the spatial filter (HTTP ${status}): ${api}`;
     case 'refused':
       return `Oort Cloud refused this (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'network':
@@ -1178,8 +1181,17 @@ function withPlace<M extends { place?: unknown }>(m: M): M {
  */
 function placesChecked(r: RecallResult): RecallResult {
   if (r === null || typeof r !== 'object' || !Array.isArray(r.memories)) return r;
+  // The filter Oort Cloud says it applied, as core's rules read it; one they refuse is dropped.
+  const { spatial: rawSpatial, ...other } = r;
+  let spatial: RecallResult['spatial'];
+  try {
+    spatial = rawSpatial === undefined ? undefined : checkSpatialFilter(rawSpatial);
+  } catch {
+    spatial = undefined;
+  }
   return {
-    ...r,
+    ...other,
+    ...(spatial !== undefined && { spatial }),
     memories: r.memories.map((raw) => {
       const m = withPlace(raw);
       const e = m.explanation as (typeof m.explanation & Record<string, unknown>) | undefined;

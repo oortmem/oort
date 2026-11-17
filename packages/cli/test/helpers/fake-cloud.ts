@@ -60,6 +60,8 @@ export interface FakeCloud {
   hangRecall?: boolean;
   /** What a recall reports in `degraded` (a server-side stage that was skipped). */
   recallDegraded?: string[];
+  /** Rewrites a recall's answer before it is sent (an Oort Cloud that answers wrongly). */
+  tamperRecall?: (answer: { memories: Record<string, unknown>[]; spatial?: unknown }) => unknown;
   /** The plan has lapsed: every route answers 402 except export, which works in every state. */
   lapsed?: boolean;
   /** Stores the next observe, then drops the connection before answering (a crash mid-request). */
@@ -1249,7 +1251,7 @@ export function fakeCloud(key: string): FakeCloud {
                 (spatial === undefined || matchesSpatial(m as never, spatial)),
             )
           : [];
-        // An agent reads only the Constellations it is attached to (CON-64). A spatial recall
+        // An agent reads only the Constellations it is attached to. A spatial recall
         // reads only the account's own memories, never a Constellation.
         const agent = (b as { agent?: string }).agent;
         const shared =
@@ -1284,7 +1286,7 @@ export function fakeCloud(key: string): FakeCloud {
             ...(d !== undefined && { distanceM: d }),
           };
         };
-        return Response.json({
+        const answer = {
           memories: hits.slice(0, b.k ?? 10).map(({ origin, ...m }) => ({
             ...m,
             ...(origin !== undefined && { origin }),
@@ -1300,7 +1302,8 @@ export function fakeCloud(key: string): FakeCloud {
           timings: { totalMs: 2 },
           ...(c.recallDegraded !== undefined && { degraded: c.recallDegraded }),
           ...(spatial !== undefined && { spatial }),
-        });
+        };
+        return Response.json(c.tamperRecall === undefined ? answer : c.tamperRecall(answer));
       }
       if (p === '/v1/observe') {
         const b = (await req.json()) as Record<string, unknown>;

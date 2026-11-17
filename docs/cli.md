@@ -1953,10 +1953,13 @@ pose is the same place). Deciding that a thing moved, and replacing the old plac
 older store adds the columns and a spatial index, after a `pre-v5` backup). Oort Cloud keeps them
 too (after 0.10.0), with the same rules. In cloud mode:
 
-- A spatial recall reads only your own memories, never a Constellation.
+- A spatial recall reads only your own memories, never a Constellation. The CLI checks the answer
+  too: it keeps only your own memories that match the filter, and refuses the recall (`usage`,
+  exit 2) if Oort Cloud does not confirm it applied the filter.
 - A `--near` whose region holds more than 2,000 placed memories you can read (after `--within`) is
-  refused (`usage`, exit 2) with Oort Cloud's message, which asks for a smaller radius or a
-  `--within`. The local store has no such limit.
+  refused (`usage`, exit 2) with "Oort Cloud refused the place or the spatial filter (HTTP 400):"
+  and Oort Cloud's reason, which asks for a smaller radius or a `--within`. The local store has no
+  such limit.
 - `oort remember` sends the place, and its retry key (`turnRef`) includes it, so the same fact at
   another place on the same day is saved again, not taken for a retry.
 - `oort cloud import` uploads each memory with its place. It skips memories already in Oort Cloud,

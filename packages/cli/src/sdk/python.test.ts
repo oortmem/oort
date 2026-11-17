@@ -603,9 +603,10 @@ describe('golden vectors (contract/sdk/vectors)', () => {
       { status: 403, code: 'expert_only', message: 'A person decides this in the dashboard.' },
       { status: 503, code: 'cap_unavailable', message: 'The daily count could not be kept.' },
       { status: 409, code: 'not_current', message: 'That judgment is not current.' },
-      // Places in Oort Cloud: core's message, or the near limit's, unchanged.
+      // Places in Oort Cloud: core's message, or the near limit's, after a fixed prefix.
       { status: 400, code: 'bad_place', message: 'within must be 1 to 16 segments.' },
       { status: 400, code: 'bad_place' },
+      { status: 400, code: 'bad_place', message: '   ' },
     ];
     vector(
       'cloud-errors.json',

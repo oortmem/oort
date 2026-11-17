@@ -154,10 +154,13 @@ export function rememberTurnRef(
   at: string,
   place?: Place,
 ): string {
-  const where = place === undefined ? '' : `\n${placeIdentity(place)}`;
-  const h = createHash('sha256')
-    .update(`${project ?? ''}\n${type ?? ''}\n${fact}${where}`)
-    .digest('hex');
+  // Without a place, the input is what it was before places (a retry across an upgrade is still
+  // one turn). With one, a NUL and a JSON array: no fact can spell another field.
+  const input =
+    place === undefined
+      ? `${project ?? ''}\n${type ?? ''}\n${fact}`
+      : `\0${JSON.stringify([project ?? '', type ?? '', fact, placeIdentity(place)])}`;
+  const h = createHash('sha256').update(input).digest('hex');
   return `remember:${h}:${at.slice(0, 10)}`;
 }
 

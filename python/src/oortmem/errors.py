@@ -278,8 +278,10 @@ def _cloud_message(kind: str, status: int, api_raw: Optional[str]) -> str:
     if kind == "bad-request":
         return f"Oort Cloud refused the request (HTTP {status}){tail}"
     if kind == "bad-place":
-        # Core's own words, naming the field and never its value, or the near limit's: as they are.
-        return api if api is not None else f"Oort Cloud refused the place or the spatial filter (HTTP {status})."
+        # Core's own words (naming the field, never its value) or the near limit's, after a prefix.
+        if api is None or api.strip() == "":
+            return f"Oort Cloud refused the place or the spatial filter (HTTP {status})."
+        return f"Oort Cloud refused the place or the spatial filter (HTTP {status}): {api}"
     if kind == "busy":
         return f"Oort Cloud is busy or down, try again shortly (HTTP {status})."
     if kind == "hive-not-enabled":

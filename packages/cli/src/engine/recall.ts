@@ -1,10 +1,13 @@
 import { filterFor } from '@oortmem/claude-code';
 import {
   ScopeDeniedError,
+  addressOf,
   checkPlace,
   checkSpatialFilter,
   formatRange,
   isIncludeLevel,
+  matchesSpatial,
+  placeDistance,
   readableNodes,
   recall,
   type DecisionController,
@@ -238,7 +241,7 @@ export interface RecallTarget extends Pick<
   grant?: Grant;
 }
 
-/** Following links in Oort Cloud: refused until CON-153. */
+/** Following links in Oort Cloud: refused, since Oort Cloud does not hold links yet. */
 export const LINKS_LOCAL_ONLY =
   'Following links is local-only for now: Oort Cloud does not hold links yet. Run `oort cloud use --local` to use --links.';
 
@@ -253,6 +256,45 @@ export function linksIgnoredInCloud(w: Pick<RecallTarget, 'config' | 'mode'>): b
 /** The warning for `linksIgnoredInCloud`, for people and the `links-local-only` code. */
 export const LINKS_IGNORED_IN_CLOUD =
   'recall.links is on, but Oort Cloud does not follow links yet: this recall followed none.';
+
+/** Oort Cloud answered a spatial recall without saying it applied the filter. */
+export const SPATIAL_NOT_APPLIED =
+  'Oort Cloud did not apply the place filter (within, near), so nothing was returned. Update Oort Cloud, or try again.';
+
+/**
+ * A spatial recall's answer from Oort Cloud, closed on this side too: refused unless Oort Cloud
+ * says it applied a filter (`spatial`), then cut to the memories in the caller's own Planet
+ * that match `filter` by core's rules. The answer reports `filter`, the one this side applied.
+ */
+export function spatialFromCloud(r: RecallResult, filter: SpatialFilter): RecallResult {
+  if (r.spatial === undefined) throw new Refusal(SPATIAL_NOT_APPLIED);
+  const ownPlanet = (m: RecallResult['memories'][number]): boolean => {
+    try {
+      return addressOf(m).level === 'user' && (m.origin === undefined || m.origin.level === 'user');
+    } catch {
+      return false;
+    }
+  };
+  return {
+    ...r,
+    memories: r.memories
+      .filter((m) => ownPlanet(m) && matchesSpatial(m, filter))
+      .map((m) => {
+        // The place path and distance as this side measures them, never as sent.
+        const { placePath: _p, distanceM: _d, ...e } = m.explanation;
+        const d = filter.near === undefined ? undefined : placeDistance(m.place, filter.near);
+        return {
+          ...m,
+          explanation: {
+            ...e,
+            ...(m.place?.nodeId !== undefined && { placePath: m.place.nodeId }),
+            ...(d !== undefined && { distanceM: d }),
+          },
+        };
+      }),
+    spatial: filter,
+  };
+}
 
 /** How much of the model pipeline a recall uses: everything, no rerank, or no model at all. */
 export type RecallSpeed = 'full' | 'fast' | 'lexical';
@@ -310,7 +352,7 @@ export async function runRecall(
     // Oort Cloud reads the account's Planet and, in the hive beta, its Constellations; `include`
     // narrows that, and a level the account cannot read is the API's own scope_denied.
     // The cloud API reads the same three fields; an older API ignores mode and knownAt.
-    return cloud.recall({
+    const r = await cloud.recall({
       text,
       ...(w.scope.projectId !== undefined && {
         project: w.scope.projectId,
@@ -327,6 +369,7 @@ export async function runRecall(
       ...(spatial?.within !== undefined && { within: spatial.within }),
       ...(spatial?.near !== undefined && { near: spatial.near }),
     });
+    return spatial === undefined ? r : spatialFromCloud(r, spatial);
   }
   if (w.store === undefined) throw new Error('unreachable: a local recall without a store');
   const config =
