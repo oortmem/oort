@@ -33,9 +33,19 @@
         "agent": "string?",
         "rerank": "boolean?",
         "embed": "boolean?",
-        "lexicalFirst": "boolean?"
+        "lexicalFirst": "boolean?",
+        "within": "string?",
+        "near": "object?"
       },
-      "response": ["memories", "timings", "temporal", "read?", "degraded?", "degradedNodes?"]
+      "response": [
+        "memories",
+        "timings",
+        "temporal",
+        "read?",
+        "degraded?",
+        "degradedNodes?",
+        "spatial?"
+      ]
     },
     {
       "method": "POST",
@@ -49,7 +59,8 @@
           "assistant": "string",
           "at": "string?",
           "session": "string?",
-          "tools": "string[]?"
+          "tools": "string[]?",
+          "place": "object?"
         }
       },
       "response": ["outcome", "memories", "counts", "duplicate?"]
@@ -115,7 +126,7 @@
       "method": "POST",
       "path": "/v1/import",
       "query": ["from"],
-      "body": "export format v1 JSON Lines, manifest first",
+      "body": "export format v1 JSON Lines, manifest first; a memory line carries place when it has one",
       "response": ["imported", "skipped", "reembedded", "next?"]
     }
   ],
@@ -143,6 +154,7 @@
       "createdAt",
       "updatedAt"
     ],
+    "optional": ["place"],
     "never": ["embedding"]
   },
   "error": {
@@ -708,6 +720,19 @@
       "404": "not-found",
       "413": "too-large",
       "429:rate_limited": "rate-limit"
+    }
+  },
+  "places": {
+    "$comment": "Places (spatial memory, as the local engine since oortmem 0.10.0). observe takes observation.place and import takes place on a memory line: core's Place (nodeId, mapId, mapVersion, frame, pose { x, y, z?, yaw? }, extent { dx, dy, dz? } or { radius }, geo { lat, lon, alt? }, sigma), checked with core's own rules; every memory saved from that turn is at that place. recall takes within (a place path: memories at it or below it, whole segments) and near ({ mapId, frame?, pose { x, y, z? }, radius }: memories whose region lies within radius metres, on the same map and frame); both set, both must hold. The filter is applied before ranking and before k. A spatial recall reads the Planet only (a Constellation copy carries no place), and its answer carries spatial (the filter applied); each memory carries place, and explanation.placePath and, with near, explanation.distanceM. A memory with a place carries it in GET /v1/memories, GET /v1/memories/:id, recall and export. A place or filter the rules refuse answers 400 bad_place with core's message; nothing is saved.",
+    "limits": {
+      "pathChars": 256,
+      "pathSegments": 16,
+      "segmentChars": 64,
+      "wordChars": 128,
+      "maxMetres": 10000000
+    },
+    "errors": {
+      "400:bad_place": "bad-place"
     }
   }
 }
