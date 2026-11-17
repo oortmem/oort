@@ -176,8 +176,9 @@ A place is an `oortmem.types.Place` (`node_id`, `map_id`, `map_version`, `frame`
 (`map_id`, `pose`, `radius`, `frame`) or a mapping. The rules are the TypeScript SDK's
 ([Spatial memory](sdk.md#spatial-memory)): `within` matches whole path segments, `near` measures
 to the memory's region on the same map and frame only, and recalled memories carry `place`,
-`why.place_path` and `why.distance_m`. Local mode only: in cloud mode each is an
-`OortRefusedError` (`local-only`) before any request.
+`why.place_path` and `why.distance_m`. Oort Cloud holds places too (after 0.10.0), and the
+TypeScript SDK, the CLI and the MCP server send them there, but this client's cloud mode does not
+yet: in cloud mode each is an `OortRefusedError` (`local-only`) before any request.
 
 A recalled memory that a link brought in (local mode) has `why.via`, a `RecallVia` with `kind`,
 `from_` (the id of the returned memory it was reached from; `from` on the wire) and `weight`.
@@ -191,7 +192,8 @@ from oortmem import Oort
 from oortmem.types import NearQuery, Place, Pose
 
 # A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
-# the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
+# the local engine (0.9.0 or newer). Oort Cloud holds them too, but this client's cloud mode does
+# not send them yet: use the TypeScript SDK, the CLI or the MCP server for places in Oort Cloud.
 with Oort(mode="local") as oort:
     seen = [
         ("The red toolbox is on shelf A1.", Place(node_id="site:hq/room:A/shelf:A1", map_id="hq", pose=Pose(x=1, y=1))),

@@ -523,5 +523,49 @@
       "retryAfter": null,
       "message": "Oort Cloud refused the request (HTTP 409): That judgment is not current."
     }
+  },
+  {
+    "status": 400,
+    "code": "bad_place",
+    "message": "within must be 1 to 16 segments.",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "invalid-argument",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the place or the spatial filter (HTTP 400): within must be 1 to 16 segments."
+    }
+  },
+  {
+    "status": 400,
+    "code": "bad_place",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "invalid-argument",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the place or the spatial filter (HTTP 400)."
+    }
+  },
+  {
+    "status": 400,
+    "code": "bad_place",
+    "message": "   ",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "invalid-argument",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the place or the spatial filter (HTTP 400)."
+    }
   }
 ]

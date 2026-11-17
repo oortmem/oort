@@ -126,6 +126,7 @@ describe('cloud url and errors', () => {
       ...Object.entries(CONTRACT.errors),
       ...Object.entries(CONTRACT.endUsers.errors),
       ...Object.entries(CONTRACT.judgments.errors),
+      ...Object.entries(CONTRACT.places.errors),
     ]) {
       const [status, code] = k.split(':');
       expect(cloudErrorKind(Number(status), code), k).toBe(kind);
@@ -422,7 +423,7 @@ describe('oort cloud commands (CON-76)', () => {
     expect(e.cloud.memories.size).toBe(10_000);
   }, 120_000);
 
-  it('cloud.import-sends-memories-without-their-place-and-says-so', async () => {
+  it('cloud.import-sends-memories-with-their-place', async () => {
     const e = setup('local');
     const w = await realWire(e.cwd, {
       env: { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1' },
@@ -441,10 +442,16 @@ describe('oort cloud commands (CON-76)', () => {
     await w.close();
     const r = await e.run(['cloud', 'import', '--yes'], { withKey: true });
     expect(r.code, r.io.stderr).toBe(0);
-    expect(r.io.stdout).toContain('1 memory goes up without its place');
+    expect(r.io.stdout).not.toContain('without its place');
     expect(e.cloud.memories.size).toBe(2);
-    expect(JSON.stringify([...e.cloud.memories.values()])).not.toContain('shelf:B3"');
-    expect(JSON.stringify([...e.cloud.memories.values()])).not.toContain('nodeId');
+    expect(e.cloud.memories.get('00000000-0000-4000-8000-00000000000a')?.['place']).toEqual({
+      nodeId: 'site:hq/room:B/shelf:B3',
+      mapId: 'hq',
+      pose: { x: 1, y: 2 },
+    });
+    expect(e.cloud.memories.get('00000000-0000-4000-8000-00000000000b')).not.toHaveProperty(
+      'place',
+    );
   });
 
   it('cloud.import-refuses-without-a-terminal-or-yes', async () => {

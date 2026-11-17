@@ -34,6 +34,7 @@ device's own map, never a map: localisation, mapping and frame alignment stay in
    Spatial 2 (CON-85).
 7. **Local only in 0.9.0.** The local engine, `oort serve`, the CLI, the local MCP server and both
    SDKs (Python through `oort serve`). Cloud mode refuses with `refused` / `local-only`.
+   *Later note: cloud mode accepts places since the release after 0.10.0 (the TypeScript SDK, the CLI and the MCP server; the Python client's cloud mode still refuses them).*
 8. **The export format stays at version 2.** `place` is an optional field, added the way
    `judgment` was. Version 1 cannot hold it.
 
@@ -212,6 +213,7 @@ passes it.
   field). The `oort.v1` contract cases cover both transports.
 - **Cloud mode** refuses `place`, `near` and `within` with `OortRefusedError` (`refused`,
   `local-only`, fix `oort cloud use --local`) before anything is sent, in both SDKs and the CLI.
+  *Later note: cloud mode accepts places since the release after 0.10.0 (the TypeScript SDK, the CLI and the MCP server; the Python client's cloud mode still refuses them).*
 - **MCP:** the shared tool definitions offer `place`, `near` and `within` only when the backend
   says it has spatial memory (`MemoryBackend.spatial`), as with judgment tools. On any other
   backend (Oort Cloud's included) one sent anyway is refused as a tool error naming `local-only`,

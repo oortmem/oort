@@ -2,7 +2,8 @@ from oortmem import Oort
 from oortmem.types import NearQuery, Place, Pose
 
 # A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
-# the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
+# the local engine (0.9.0 or newer). Oort Cloud holds them too, but this client's cloud mode does
+# not send them yet: use the TypeScript SDK, the CLI or the MCP server for places in Oort Cloud.
 with Oort(mode="local") as oort:
     seen = [
         ("The red toolbox is on shelf A1.", Place(node_id="site:hq/room:A/shelf:A1", map_id="hq", pose=Pose(x=1, y=1))),

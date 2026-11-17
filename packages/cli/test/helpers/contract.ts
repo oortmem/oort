@@ -65,6 +65,8 @@ export interface Case {
     fail?: FailSpec;
     noKey?: boolean;
     memories?: number;
+    /** The place every bulk memory (`memories`) is at; absent: none has a place. */
+    memoriesPlace?: Record<string, unknown>;
     /**
      * Per-user memory (CON-132): `server-key`, the key acts for end users; `legacy`, an Oort Cloud
      * from before it (Oort-User ignored). Absent: a current cloud, a key without the capability.
@@ -455,7 +457,12 @@ export async function seedCloud(
   }
   for (let i = 0; i < (c.cloud?.memories ?? 0); i++) {
     const at = new Date(Date.parse(now) - i * 60_000).toISOString();
-    const m = fakeMemory({ text: `bulk memory number ${i}`, updatedAt: at, createdAt: at });
+    const m = fakeMemory({
+      text: `bulk memory number ${i}`,
+      updatedAt: at,
+      createdAt: at,
+      ...(c.cloud?.memoriesPlace !== undefined && { place: c.cloud.memoriesPlace }),
+    });
     fake.memories.set(m.id, m);
   }
   endUsersOf(fake, c);

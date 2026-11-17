@@ -67,7 +67,7 @@ usage error.
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- |
 | `recall(query, opts?)`                                                                                                                                          | `RecallResult`                                     | yes                                                               |
 | `observe(turn, { signal? })`                                                                                                                                    | `ObserveResult`                                    | yes                                                               |
-| `remember(facts, { type?, place? })`                                                                                                                            | `RememberResult`                                   | yes (`place`: `refused`, `local-only`)                            |
+| `remember(facts, { type?, place? })`                                                                                                                            | `RememberResult`                                   | yes (`place` after 0.10.0)                                        |
 | `forget(id, { everywhere? })`                                                                                                                                   | `ForgetResult`                                     | yes (`everywhere`: cloud only)                                    |
 | `pin(id)` / `unpin(id)`                                                                                                                                         | `PinResult`                                        | yes (`changed: null`)                                             |
 | `recent({ since?, limit? })`                                                                                                                                    | `{ memories, warnings }`                           | yes                                                               |
@@ -154,17 +154,22 @@ are: `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?, geo?, sigma? }`, w
 keeps memories whose path contains those whole segments; `near: { mapId, frame?, pose, radius }`
 keeps those within `radius` metres on the same map and frame. Both filter before ranking and
 `limit`, and compose with the time modes. Recalled memories carry `place`, `why.placePath` and
-`why.distanceM`. `frame: 'odom'` is refused. In cloud mode all three are `refused`, reason
-`local-only`, before anything is sent (until Oort Cloud holds places).
+`why.distanceM`. `frame: 'odom'` is refused. Oort Cloud takes all three after 0.10.0, with the
+same checks: a spatial recall there reads only your own memories (never a Constellation), the
+SDK keeps only your own memories that match the filter and refuses the recall if Oort Cloud does
+not confirm it applied the filter, and a `near` whose region holds more than 2,000 placed
+memories is an `OortUsageError` (reason `invalid-argument`) whose message gives Oort Cloud's
+reason, asking for a smaller radius or a `within`. In
+0.10.0 and older, cloud mode refuses them (`refused`, `local-only`) before anything is sent.
 
 <!-- example: examples/src/spatial.ts -->
 
 ```ts
 import { createOort, type Place } from 'oortmem';
 
-// A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
-// the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
-await using oort = await createOort({ mode: 'local' });
+// A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
+// on the local engine (0.9.0 or newer) and on Oort Cloud (after 0.10.0).
+await using oort = await createOort();
 
 const room = (r: string, x: number, y: number, at?: string): Place => ({
   nodeId: `site:hq/room:${r}${at === undefined ? '' : `/${at}`}`,

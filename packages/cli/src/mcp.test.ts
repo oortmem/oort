@@ -492,11 +492,12 @@ describe('oort mcp with places (CON-84)', () => {
     await w.store.close();
   });
 
-  it('mcp.cloud-mode-offers-no-place-arguments', async () => {
+  it('mcp.cloud-mode-offers-place-arguments-and-no-links', async () => {
     const h = harness({ adapters: false });
     const w = await h.wire(h.cwd);
     const backend = localBackend({ wired: { ...w, mode: 'cloud', cloud: {} as CloudClient } });
-    expect(backend.spatial).toBeUndefined();
+    // Oort Cloud holds places: recall offers within and near, remember offers place.
+    expect(backend.spatial).toBe(true);
     // Oort Cloud holds no links yet (CON-153): the tool is not offered.
     expect(backend.link).toBeUndefined();
     await w.store.close();

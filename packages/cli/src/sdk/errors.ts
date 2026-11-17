@@ -249,6 +249,10 @@ function fromCloud(e: OortCloudError): OortError {
       return new OortRefusedError(e.message, { ...opts, reason: e.kind });
     case 'too-large':
       return new OortUsageError(e.message, { ...opts, reason: 'too-large' });
+    case 'bad-place':
+      // As local mode refuses a place or a filter core's rules refuse; the message is Oort
+      // Cloud's own (core's, or the near limit's), unchanged.
+      return new OortUsageError(e.message, { ...opts, reason: 'invalid-argument' });
     case 'not-found':
       return new OortNotFoundError(e.message, opts);
     case 'ambiguous-prefix':

@@ -209,14 +209,13 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   const w = deps.wired;
   const now = deps.now ?? (() => new Date());
   const filter = filterFor(w.scope);
-  // Places live in the local store only (CON-84): Oort Cloud holds none until CON-87.
-  const spatial = w.mode !== 'cloud';
   // Links live in the local store only (CON-148): Oort Cloud holds none until CON-153.
   const links = w.mode !== 'cloud' && w.store.links === true;
   // Recall feedback lives in the local store only.
   const feedback = w.mode !== 'cloud' && w.store.feedback === true;
   return {
-    ...(spatial && { spatial: true as const }),
+    // Places: the local store and Oort Cloud both hold them.
+    spatial: true as const,
     ...(feedback && {
       /**
        * Kept pending, by this agent: it changes no ranking and no label until a person confirms
@@ -801,15 +800,18 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
   const project = w.scope.projectId;
   const local = localBackend(deps);
   return {
+    // Oort Cloud holds places: recall offers within and near, remember offers place.
+    spatial: true as const,
     recall: local.recall,
 
-    async remember({ facts, type, visibility }) {
+    async remember({ facts, type, visibility, place }) {
       refuseStarInCloud(w);
       // The same turn the local engine observes for a fact, sent to the cloud's write path.
       const results = await rememberFactsInCloud(client, facts, {
         now,
         ...(type !== undefined && { type }),
         ...(project !== undefined && { project: { project, ...privacyStatement(w) } }),
+        ...(place !== undefined && { place: checkPlace(placeOf(place)) }),
       });
       // No proposals yet (hive slice 9): a fact meant for a Constellation is saved privately, and
       // sharing it stays the person's confirmed step.

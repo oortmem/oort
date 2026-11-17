@@ -2,8 +2,14 @@ import { randomUUID } from 'node:crypto';
 import {
   JudgmentInputError,
   activeJudgments,
+  checkNear,
+  checkPlace,
+  checkPlacePath,
   confirmJudgment,
   createMemoryStore,
+  matchesSpatial,
+  placeDistance,
+  type SpatialFilter,
   judge as coreJudge,
   localGrant,
   recordJudgment,
@@ -54,6 +60,8 @@ export interface FakeCloud {
   hangRecall?: boolean;
   /** What a recall reports in `degraded` (a server-side stage that was skipped). */
   recallDegraded?: string[];
+  /** Rewrites a recall's answer before it is sent (an Oort Cloud that answers wrongly). */
+  tamperRecall?: (answer: { memories: Record<string, unknown>[]; spatial?: unknown }) => unknown;
   /** The plan has lapsed: every route answers 402 except export, which works in every state. */
   lapsed?: boolean;
   /** Stores the next observe, then drops the connection before answering (a crash mid-request). */
@@ -471,6 +479,22 @@ function findings(text: string): { kind: string; start: number; end: number }[] 
 
 const err = (status: number, code: string, message: string): Response =>
   Response.json({ error: { code, message } }, { status });
+
+/** A refusal of a place or a spatial filter (the contract's `places`): core's own message. */
+class BadPlace extends Error {}
+
+/** Runs one of core's place checks; its RangeError becomes `BadPlace` with core's message. */
+function placeRule<T>(check: () => T): T {
+  try {
+    return check();
+  } catch (e) {
+    if (e instanceof RangeError) throw new BadPlace(e.message);
+    throw e;
+  }
+}
+
+/** The message the fake gives a `near` over `places.limits.nearCandidates` (the API's wording may differ). */
+export const NEAR_LIMIT_MESSAGE = `near: more than ${CONTRACT.places.limits.nearCandidates} placed memories lie within this radius. Use a smaller radius, or add a within.`;
 
 /** The API's usual error code for a status, for a forced failure given as a number. */
 const STATUS_CODE: Record<number, string> = {
@@ -1176,10 +1200,37 @@ export function fakeCloud(key: string): FakeCloud {
           project?: string;
           k?: number;
           projectPrivate?: boolean;
+          within?: unknown;
+          near?: unknown;
         };
         c.recalls.push(b);
         state(b.project, b.projectPrivate);
         if (c.hangRecall === true) return new Promise<Response>(() => {});
+        // Places (the contract's `places`): checked by core's rules, applied before ranking and k.
+        let spatial: SpatialFilter | undefined;
+        try {
+          if (b.within !== undefined || b.near !== undefined) {
+            spatial = {
+              ...(b.within !== undefined && {
+                within: placeRule(() => checkPlacePath(b.within, 'within')),
+              }),
+              ...(b.near !== undefined && { near: placeRule(() => checkNear(b.near)) }),
+            };
+          }
+        } catch (e) {
+          if (e instanceof BadPlace) return err(400, 'bad_place', e.message);
+          throw e;
+        }
+        if (spatial?.near !== undefined) {
+          // Placed memories the caller can read in the near's region (after within), whatever
+          // the query: over the limit, the API asks for a smaller radius or a within.
+          const inRegion = [...c.memories.values()].filter(
+            (m) => project(m, b.project) && matchesSpatial(m as never, spatial),
+          ).length;
+          if (inRegion > CONTRACT.places.limits.nearCandidates) {
+            return err(400, 'bad_place', NEAR_LIMIT_MESSAGE);
+          }
+        }
         const words = b.text
           .toLowerCase()
           .split(/\W+/)
@@ -1193,15 +1244,24 @@ export function fakeCloud(key: string): FakeCloud {
         }
         const match = (m: FakeMemory) => words.some((w) => m.text.toLowerCase().includes(w));
         const own = wantsPlanet
-          ? [...c.memories.values()].filter((m) => project(m, b.project) && match(m))
+          ? [...c.memories.values()].filter(
+              (m) =>
+                project(m, b.project) &&
+                match(m) &&
+                (spatial === undefined || matchesSpatial(m as never, spatial)),
+            )
           : [];
-        // An agent reads only the Constellations it is attached to (CON-64).
+        // An agent reads only the Constellations it is attached to. A spatial recall
+        // reads only the account's own memories, never a Constellation.
         const agent = (b as { agent?: string }).agent;
-        const shared = wantsHive
-          ? [...c.hive.shared.values()]
-              .filter((x) => agent === undefined || attached(x.constellation, agent) !== undefined)
-              .filter(match)
-          : [];
+        const shared =
+          wantsHive && spatial === undefined
+            ? [...c.hive.shared.values()]
+                .filter(
+                  (x) => agent === undefined || attached(x.constellation, agent) !== undefined,
+                )
+                .filter(match)
+            : [];
         const hits = [
           ...own.map((m) => ({ ...m, origin: undefined as unknown })),
           ...shared.map(({ constellation, sourceId: _s, ...m }) => ({
@@ -1217,28 +1277,54 @@ export function fakeCloud(key: string): FakeCloud {
             },
           })),
         ];
-        return Response.json({
+        const where = (m: FakeMemory) => {
+          if (spatial === undefined) return {};
+          const place = m['place'] as { nodeId?: string } | undefined;
+          const d = spatial.near === undefined ? undefined : placeDistance(place, spatial.near);
+          return {
+            ...(place?.nodeId !== undefined && { placePath: place.nodeId }),
+            ...(d !== undefined && { distanceM: d }),
+          };
+        };
+        const answer = {
           memories: hits.slice(0, b.k ?? 10).map(({ origin, ...m }) => ({
             ...m,
             ...(origin !== undefined && { origin }),
-            explanation: { fused: 1, rrf: 1, coverage: 1, activation: 0, hydrated: false },
+            explanation: {
+              fused: 1,
+              rrf: 1,
+              coverage: 1,
+              activation: 0,
+              hydrated: false,
+              ...where(m as FakeMemory),
+            },
           })),
           timings: { totalMs: 2 },
           ...(c.recallDegraded !== undefined && { degraded: c.recallDegraded }),
-        });
+          ...(spatial !== undefined && { spatial }),
+        };
+        return Response.json(c.tamperRecall === undefined ? answer : c.tamperRecall(answer));
       }
       if (p === '/v1/observe') {
         const b = (await req.json()) as Record<string, unknown>;
         c.observed.push(b);
         state(b['project'], b['projectPrivate']);
-        const o = b['observation'] as { user: string };
+        const o = b['observation'] as { user: string; place?: unknown };
         const ref = typeof b['turnRef'] === 'string' ? b['turnRef'] : undefined;
         if (ref !== undefined && ref.length > 128)
           return err(400, 'bad_request', 'turnRef too long');
+        let place: ReturnType<typeof checkPlace> | undefined;
+        try {
+          place = o.place === undefined ? undefined : placeRule(() => checkPlace(o.place));
+        } catch (e) {
+          if (e instanceof BadPlace) return err(400, 'bad_place', e.message); // nothing saved
+          throw e;
+        }
         const seenTurn = ref === undefined ? undefined : c.turns.get(ref);
         if (seenTurn !== undefined) return Response.json({ ...seenTurn, duplicate: true });
         const m = fakeMemory({
           text: o.user,
+          ...(place !== undefined && { place }),
           ...(typeof b['project'] === 'string' && {
             scope: {
               orgId: 'acct:a1',
@@ -1398,8 +1484,19 @@ export function fakeCloud(key: string): FakeCloud {
         let skipped = 0;
         const begin = from === 0 ? 1 : from;
         const end = Math.min(lines.length, begin + CONTRACT.limits.importLinesPerCall);
-        for (let i = begin; i < end; i++) {
-          const m = JSON.parse(lines[i] as string) as FakeMemory;
+        const parsed: FakeMemory[] = [];
+        try {
+          for (let i = begin; i < end; i++) {
+            const m = JSON.parse(lines[i] as string) as FakeMemory;
+            // A memory line's place is checked by core's rules: a bad one refuses the request.
+            if (m['place'] !== undefined) m['place'] = placeRule(() => checkPlace(m['place']));
+            parsed.push(m);
+          }
+        } catch (e) {
+          if (e instanceof BadPlace) return err(400, 'bad_place', e.message);
+          throw e;
+        }
+        for (const m of parsed) {
           if (c.memories.has(m.id)) skipped++;
           else {
             // As the real import does: every line is re-scoped to the account's own Planet (its

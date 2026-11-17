@@ -240,6 +240,9 @@ def _cloud_kind(status: int, code: Optional[str]) -> str:
         return "not-found"
     if status == 409 and code == "ambiguous":
         return "ambiguous-prefix"
+    if status == 400 and code == "bad_place":
+        # A place or a spatial filter core's rules refuse, or a near over the contract's limit.
+        return "bad-place"
     if status == 413:
         return "too-large"
     if status == 429:
@@ -274,6 +277,11 @@ def _cloud_message(kind: str, status: int, api_raw: Optional[str]) -> str:
         return "That id prefix matches more than one memory in Oort Cloud; give more of the id."
     if kind == "bad-request":
         return f"Oort Cloud refused the request (HTTP {status}){tail}"
+    if kind == "bad-place":
+        # Core's own words (naming the field, never its value) or the near limit's, after a prefix.
+        if api is None or api.strip() == "":
+            return f"Oort Cloud refused the place or the spatial filter (HTTP {status})."
+        return f"Oort Cloud refused the place or the spatial filter (HTTP {status}): {api}"
     if kind == "busy":
         return f"Oort Cloud is busy or down, try again shortly (HTTP {status})."
     if kind == "hive-not-enabled":
@@ -368,6 +376,9 @@ def cloud_error(
         return OortRefusedError(message, **opts, reason="end-user-limit")
     if kind == "too-large":
         return OortUsageError(message, **opts, reason="too-large")
+    if kind == "bad-place":
+        # As local mode refuses a place or a filter core's rules refuse, with Oort Cloud's message.
+        return OortUsageError(message, **opts, reason="invalid-argument")
     if kind == "not-found":
         return OortNotFoundError(message, **opts)
     if kind == "ambiguous-prefix":

@@ -1,4 +1,11 @@
-import { observe, type Grant, type MemoryType, type Place, type Scope } from '@oortmem/core';
+import {
+  frameOf,
+  observe,
+  type Grant,
+  type MemoryType,
+  type Place,
+  type Scope,
+} from '@oortmem/core';
 import { createHash } from 'node:crypto';
 import type { CloudClient } from './cloud.js';
 import { scrubForCloud } from './cloud-scrub.js';
@@ -61,7 +68,7 @@ export async function rememberFacts(
     now?: Date;
     /** The grant to read and write with (the SDK's principal); default the scope's local grant. */
     grant?: Grant;
-    /** Where every fact is (CON-84): each memory written carries it. Local only. */
+    /** Where every fact is: each memory written carries it. */
     place?: Place;
   },
 ): Promise<RememberResult[]> {
@@ -117,19 +124,43 @@ export type CloudRememberResult = Omit<RememberResult, 'outcome'> & {
 };
 
 /**
+ * What makes two places one for a remember's `turnRef`: the fields core compares when it decides
+ * whether a turn is a sighting of a memory (the place path, and the pose on its map and frame).
+ * What core only records (the map's version, the yaw, the extent, sigma) is left out. A place
+ * with neither a path nor a pose is compared by its geo position.
+ */
+function placeIdentity(p: Place): string {
+  const pose =
+    p.pose === undefined
+      ? undefined
+      : { x: p.pose.x, y: p.pose.y, ...(p.pose.z !== undefined && { z: p.pose.z }) };
+  return JSON.stringify({
+    ...(p.nodeId !== undefined && { nodeId: p.nodeId }),
+    ...(pose !== undefined && { mapId: p.mapId, frame: frameOf(p), pose }),
+    ...(p.nodeId === undefined && pose === undefined && p.geo !== undefined && { geo: p.geo }),
+  });
+}
+
+/**
  * The `turnRef` a cloud remember sends, so a retry after a lost response is a duplicate, not a
- * second save: the project, the type hint and the scrubbed fact, hashed, and the UTC day. A
- * fact stated again on a later day is observed again (and reinforced).
+ * second save: the project, the type hint, the scrubbed fact and its place, hashed, and the UTC
+ * day. A fact stated again on a later day is observed again (and reinforced), and so is the same
+ * fact at another place on the same day. Without a place the ref is what it was before places.
  */
 export function rememberTurnRef(
   fact: string,
   type: MemoryType | undefined,
   project: string | undefined,
   at: string,
+  place?: Place,
 ): string {
-  const h = createHash('sha256')
-    .update(`${project ?? ''}\n${type ?? ''}\n${fact}`)
-    .digest('hex');
+  // Without a place, the input is what it was before places (a retry across an upgrade is still
+  // one turn). With one, a NUL and a JSON array: no fact can spell another field.
+  const input =
+    place === undefined
+      ? `${project ?? ''}\n${type ?? ''}\n${fact}`
+      : `\0${JSON.stringify([project ?? '', type ?? '', fact, placeIdentity(place)])}`;
+  const h = createHash('sha256').update(input).digest('hex');
   return `remember:${h}:${at.slice(0, 10)}`;
 }
 
@@ -144,6 +175,8 @@ export function cloudRememberRequest(
     type?: MemoryType | undefined;
     at: string;
     project?: { project?: string; projectPrivate?: boolean };
+    /** Where the fact is: the memory saved carries it, and it is part of the `turnRef`. */
+    place?: Place | undefined;
   },
 ): { dropped: true } | { dropped: false; body: Parameters<CloudClient['observe']>[0] } {
   const s = scrubForCloud({ ...rememberTurn(fact, opts.type), at: opts.at });
@@ -154,8 +187,8 @@ export function cloudRememberRequest(
     dropped: false,
     body: {
       ...opts.project,
-      turnRef: rememberTurnRef(clean, opts.type, opts.project?.project, opts.at),
-      observation: s.turn,
+      turnRef: rememberTurnRef(clean, opts.type, opts.project?.project, opts.at, opts.place),
+      observation: { ...s.turn, ...(opts.place !== undefined && { place: opts.place }) },
     },
   };
 }
@@ -174,6 +207,8 @@ export async function rememberFactsInCloud(
     type?: MemoryType;
     now?: () => Date;
     project?: { project: string; projectPrivate?: boolean };
+    /** Where every fact is (checked by the caller). */
+    place?: Place;
   },
 ): Promise<CloudRememberResult[]> {
   const results: CloudRememberResult[] = [];
@@ -182,6 +217,7 @@ export async function rememberFactsInCloud(
       type: opts.type,
       at: (opts.now?.() ?? new Date()).toISOString(),
       ...(opts.project !== undefined && { project: opts.project }),
+      ...(opts.place !== undefined && { place: opts.place }),
     });
     if (req.dropped) {
       results.push({ fact: i, outcome: 'skipped', reason: 'secret' });

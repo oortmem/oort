@@ -41,6 +41,7 @@ import type {
   ObserveResult,
   Outcome,
   PinResult,
+  Place,
   RecordJudgmentView,
   RememberResult,
   Turn,
@@ -164,7 +165,8 @@ export async function observe(ctx: Ctx, turn: Turn): Promise<ObserveResult> {
   const r = await clientOf(ctx).observe({
     ...project(ctx),
     ...(turn.turnRef !== undefined && { turnRef: turn.turnRef }),
-    observation: s.turn,
+    // The place is checked by core's rules already (validate.ts), as local mode checks it.
+    observation: { ...s.turn, ...(turn.place !== undefined && { place: turn.place }) },
   });
   return observeView(r, [...ctx.warnings]);
 }
@@ -177,6 +179,7 @@ export async function remember(
   ctx: Ctx,
   facts: readonly string[],
   type: MemoryType | undefined,
+  place?: Place,
 ): Promise<RememberResult> {
   refuseStar(ctx);
   const results: RememberResult['results'] = [];
@@ -185,6 +188,7 @@ export async function remember(
       type,
       at: ctx.now().toISOString(),
       project: project(ctx),
+      ...(place !== undefined && { place }),
     });
     if (req.dropped) {
       results.push({ fact: i, outcome: 'skipped', reason: 'secret' });

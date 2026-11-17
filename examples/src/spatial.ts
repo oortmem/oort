@@ -1,8 +1,8 @@
 import { createOort, type Place } from 'oortmem';
 
-// A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
-// the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
-await using oort = await createOort({ mode: 'local' });
+// A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
+// on the local engine (0.9.0 or newer) and on Oort Cloud (after 0.10.0).
+await using oort = await createOort();
 
 const room = (r: string, x: number, y: number, at?: string): Place => ({
   nodeId: `site:hq/room:${r}${at === undefined ? '' : `/${at}`}`,

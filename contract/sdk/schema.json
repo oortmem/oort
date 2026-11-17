@@ -47,6 +47,10 @@
             "type": "integer",
             "description": "Extra bulk memories in the fake cloud."
           },
+          "memoriesPlace": {
+            "type": "object",
+            "description": "The place every bulk memory is at (core's Place); absent: none has a place."
+          },
           "endUsers": {
             "enum": ["server-key", "legacy"],
             "description": "Per-user memory (CON-132): server-key, the key acts for end users (whoami lists end-users); legacy, an Oort Cloud from before it, which ignores Oort-User. Absent: a current cloud and a key without the capability."

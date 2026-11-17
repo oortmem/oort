@@ -161,17 +161,17 @@ const everywhereNeedsPerson = (id: string): string =>
 const commandSafeId = (id: string): string => (/^[A-Za-z0-9-]{1,64}$/.test(id) ? id : '<id>');
 
 /**
- * The tool error for a spatial argument on a backend without places (CON-84), such as Oort
- * Cloud: refused, never stripped, so the model never believes a recall was filtered by place or
- * a place was stored. The same `local-only` refusal the SDK and the CLI give.
+ * The tool error for a spatial argument on a backend without places: refused, never
+ * stripped, so the model never believes a recall was filtered by place or a place was stored.
+ * Oort's own backends (the local store and Oort Cloud) both hold places.
  */
-const SPATIAL_LOCAL_ONLY =
-  'Places (within, near, place) are local-only for now: this memory does not hold them, so nothing was recalled or saved. Ask the person to use local Oort for them (oort cloud use --local).';
+const SPATIAL_UNSUPPORTED =
+  'Places (within, near, place) are not supported by this memory backend: it does not hold them, so nothing was recalled or saved.';
 
 function refuseSpatial(input: unknown, keys: readonly string[], spatial: boolean): void {
   if (spatial) return;
   const i = input as Record<string, unknown>;
-  if (keys.some((k) => i[k] !== undefined)) throw new MemoryToolError(SPATIAL_LOCAL_ONLY);
+  if (keys.some((k) => i[k] !== undefined)) throw new MemoryToolError(SPATIAL_UNSUPPORTED);
 }
 
 /** Only the keys `schema` declares: what a loose schema let through stays here. */

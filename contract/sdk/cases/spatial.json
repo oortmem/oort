@@ -1,7 +1,7 @@
 [
   {
     "id": "spatial.within-keeps-whole-segments-and-explains-the-path",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "seed": "places",
     "steps": [
       {
@@ -38,7 +38,7 @@
   },
   {
     "id": "spatial.near-keeps-the-radius-on-one-map-with-the-distance",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "seed": "places",
     "steps": [
       {
@@ -84,7 +84,7 @@
   },
   {
     "id": "spatial.recall-without-a-filter-ignores-places",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "seed": "places",
     "steps": [
       {
@@ -103,7 +103,7 @@
   },
   {
     "id": "spatial.remember-and-observe-carry-a-place",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "steps": [
       {
         "call": "remember",
@@ -146,7 +146,7 @@
   },
   {
     "id": "spatial.a-bad-place-or-filter-is-a-usage-error",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "steps": [
       {
         "call": "recall",
@@ -196,35 +196,56 @@
     ]
   },
   {
-    "id": "spatial.is-local-only-in-oort-cloud",
+    "id": "spatial.near-over-the-oort-cloud-limit-is-a-usage-error",
+    "description": "Oort Cloud answers a near whose region holds more placed memories than places.limits.nearCandidates (after within) with 400 bad_place; the SDK passes its message on after a fixed prefix.",
     "transports": ["cloud"],
+    "cloud": {
+      "memories": 2001,
+      "memoriesPlace": { "nodeId": "site:hq/bulk", "mapId": "hq", "pose": { "x": 0, "y": 0 } }
+    },
     "steps": [
       {
         "call": "recall",
-        "args": { "query": "toolbox", "within": "room:B" },
-        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+        "args": {
+          "query": "bulk memory",
+          "near": { "mapId": "hq", "pose": { "x": 0, "y": 0 }, "radius": 1 }
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "invalid-argument",
+            "message": { "$regex": "smaller radius" }
+          }
+        }
       },
       {
         "call": "recall",
         "args": {
-          "query": "toolbox",
+          "query": "bulk memory",
+          "within": "room:Z",
           "near": { "mapId": "hq", "pose": { "x": 0, "y": 0 }, "radius": 1 }
         },
-        "expect": { "error": { "code": "refused", "reason": "local-only" } }
-      },
+        "expect": { "result": { "memories": [] } }
+      }
+    ]
+  },
+  {
+    "id": "spatial.a-place-oort-cloud-refuses-is-a-usage-error",
+    "description": "A 400 bad_place from Oort Cloud is the usage error local mode gives a place core's rules refuse, with Oort Cloud's message after a fixed prefix.",
+    "transports": ["cloud"],
+    "steps": [
       {
         "call": "remember",
         "args": { "facts": "The toolbox is on shelf B3.", "place": { "nodeId": "shelf:B3" } },
-        "expect": { "error": { "code": "refused", "reason": "local-only" } }
-      },
-      {
-        "call": "observe",
-        "args": {
-          "user": "The toolbox is on shelf B3.",
-          "assistant": "Noted.",
-          "place": { "nodeId": "shelf:B3" }
-        },
-        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+        "cloud": { "fail": { "POST /v1/observe": { "status": 400, "code": "bad_place" } } },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "invalid-argument",
+            "status": 400,
+            "message": "Oort Cloud refused the place or the spatial filter (HTTP 400): forced 400"
+          }
+        }
       }
     ]
   }

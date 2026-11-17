@@ -1,12 +1,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type {
-  IncludeLevel,
-  Memory,
-  NotRewrittenReason,
-  RecallMode,
-  RecallResult,
-  Tier,
+import {
+  checkPlace,
+  checkPlacePath,
+  checkSpatialFilter,
+  type IncludeLevel,
+  type Memory,
+  type NearQuery,
+  type NotRewrittenReason,
+  type Place,
+  type RecallMode,
+  type RecallResult,
+  type Tier,
 } from '@oortmem/core';
 import {
   TIMING_HEADER,
@@ -125,6 +130,7 @@ export type CloudErrorKind =
   | 'hive-not-enabled'
   | 'end-user-limit'
   | 'end-users-unsupported'
+  | 'bad-place'
   | 'refused';
 
 /** Kinds the account has to fix, or that pass with time: a hook's queue waits instead. */
@@ -200,6 +206,11 @@ function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): stri
       return `Oort Cloud refused a new end user (HTTP 402)${api !== undefined ? `: ${api}` : '.'}`;
     case 'end-users-unsupported':
       return status === 404 ? END_USERS_NOT_OFFERED : END_USERS_UNSUPPORTED;
+    case 'bad-place':
+      // Core's own words (naming the field, never its value) or the near limit's, after a prefix.
+      return api === undefined || api.trim() === ''
+        ? `Oort Cloud refused the place or the spatial filter (HTTP ${status}).`
+        : `Oort Cloud refused the place or the spatial filter (HTTP ${status}): ${api}`;
     case 'refused':
       return `Oort Cloud refused this (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'network':
@@ -249,6 +260,8 @@ export function cloudErrorKind(status: number, code?: string): CloudErrorKind {
   }
   if (status === 404) return 'not-found';
   if (status === 409 && code === 'ambiguous') return 'ambiguous-prefix';
+  // A place or a spatial filter core's rules refuse, or a near over the contract's limit.
+  if (status === 400 && code === 'bad_place') return 'bad-place';
   if (status === 413) return 'too-large';
   if (status === 429) return 'rate-limit';
   // The daily count of agent-recorded judgments could not be kept: nothing was saved. Not an outage,
@@ -276,6 +289,8 @@ export interface CloudObservation {
   at?: string;
   session?: string;
   tools?: string[];
+  /** Where the turn happened: every memory saved from it is at this place. */
+  place?: Place;
 }
 
 export interface CloudObserveResult {
@@ -604,6 +619,10 @@ export interface CloudClient {
      * query embedding, false always embeds. An older API ignores it (and runs lexical first).
      */
     lexicalFirst?: boolean;
+    /** Only memories at this place path or below it (whole segments). */
+    within?: string;
+    /** Only memories whose region lies within `radius` metres, on the same map and frame. */
+    near?: NearQuery;
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
@@ -1037,7 +1056,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       recall: async (q) => {
         const { res, done } = await timedCall('POST', '/v1/recall', { json: q }, user);
         const r = (await res.json()) as RecallResult;
-        return withCloudTimings(r, done());
+        return withCloudTimings(placesChecked(r), done());
       },
       constellations: async () =>
         (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
@@ -1067,14 +1086,19 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         };
       },
       observe: (b) => json('POST', '/v1/observe', b),
-      list: (q = {}) => {
+      list: async (q = {}) => {
         const p = new URLSearchParams();
         for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v));
         const qs = p.toString();
-        return json('GET', `/v1/memories${qs === '' ? '' : `?${qs}`}`);
+        const r = await json<{ memories: CloudMemory[]; next?: string }>(
+          'GET',
+          `/v1/memories${qs === '' ? '' : `?${qs}`}`,
+        );
+        return Array.isArray(r?.memories) ? { ...r, memories: r.memories.map(withPlace) } : r;
       },
       get: async (id, o = {}) => {
-        if (o.timeoutMs === undefined && o.signal === undefined) return json('GET', idPath(id));
+        if (o.timeoutMs === undefined && o.signal === undefined)
+          return withPlace(await json<CloudMemory>('GET', idPath(id)));
         // One deadline for the whole read, body included (the request's own timer stops at the
         // headers), so a body that stalls is aborted with its connection.
         const ctl = new AbortController();
@@ -1091,7 +1115,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
             o.timeoutMs ?? timeout,
             ctl.signal,
           );
-          return (await res.json()) as CloudMemory;
+          return withPlace((await res.json()) as CloudMemory);
         } finally {
           clearTimeout(timer);
           o.signal?.removeEventListener('abort', stop);
@@ -1135,6 +1159,62 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     };
   };
   return build(undefined);
+}
+
+/**
+ * A memory from Oort Cloud with its place as core's rules read it: one they refuse is left out,
+ * never passed on as sent.
+ */
+function withPlace<M extends { place?: unknown }>(m: M): M {
+  if (m === null || typeof m !== 'object' || m.place === undefined) return m;
+  const { place, ...rest } = m;
+  try {
+    return { ...rest, place: checkPlace(place) } as M;
+  } catch {
+    return rest as M;
+  }
+}
+
+/**
+ * A recall from Oort Cloud with every memory's place checked (`withPlace`), its place path a
+ * path core accepts and its distance a finite number of metres; anything else is left out.
+ */
+function placesChecked(r: RecallResult): RecallResult {
+  if (r === null || typeof r !== 'object' || !Array.isArray(r.memories)) return r;
+  // The filter Oort Cloud says it applied, as core's rules read it; one they refuse is dropped.
+  const { spatial: rawSpatial, ...other } = r;
+  let spatial: RecallResult['spatial'];
+  try {
+    spatial = rawSpatial === undefined ? undefined : checkSpatialFilter(rawSpatial);
+  } catch {
+    spatial = undefined;
+  }
+  return {
+    ...other,
+    ...(spatial !== undefined && { spatial }),
+    memories: r.memories.map((raw) => {
+      const m = withPlace(raw);
+      const e = m.explanation as (typeof m.explanation & Record<string, unknown>) | undefined;
+      if (e === null || typeof e !== 'object') return m;
+      const { placePath, distanceM, ...rest } = e;
+      let path: string | undefined;
+      try {
+        path = placePath === undefined ? undefined : checkPlacePath(placePath, 'placePath');
+      } catch {
+        path = undefined;
+      }
+      const okDistance =
+        typeof distanceM === 'number' && Number.isFinite(distanceM) && distanceM >= 0;
+      return {
+        ...m,
+        explanation: {
+          ...rest,
+          ...(path !== undefined && { placePath: path }),
+          ...(okDistance && { distanceM }),
+        } as typeof m.explanation,
+      };
+    }),
+  };
 }
 
 /** The shortest id prefix the API looks up (it answers 404 below this). */

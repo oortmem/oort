@@ -55,6 +55,7 @@ const CLOUD_CODE: Record<CloudErrorKind, ErrorCode> = {
   'not-found': 'not-found',
   'ambiguous-prefix': 'ambiguous-id',
   'bad-request': 'usage',
+  'bad-place': 'usage',
   busy: 'network',
   refused: 'refused',
   network: 'network',
