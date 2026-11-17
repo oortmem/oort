@@ -359,7 +359,7 @@ describe('oort judge', () => {
     h.wire = async (dir, o) => ({ ...(await base(dir, o)), mode: 'cloud', cloud: {} as never });
     const r = await record(h);
     expect(r.code).toBe(2);
-    expect(r.io.stderr).toContain('a person records judgments in the dashboard');
+    expect(r.io.stderr).toContain("so it cannot record a person's judgment");
   });
 });
 
