@@ -176,7 +176,7 @@ A place is an `oortmem.types.Place` (`node_id`, `map_id`, `map_version`, `frame`
 (`map_id`, `pose`, `radius`, `frame`) or a mapping. The rules are the TypeScript SDK's
 ([Spatial memory](sdk.md#spatial-memory)): `within` matches whole path segments, `near` measures
 to the memory's region on the same map and frame only, and recalled memories carry `place`,
-`why.place_path` and `why.distance_m`. Oort Cloud holds places too (after 0.10.0), and the
+`why.place_path` and `why.distance_m`. Oort Cloud holds places too (0.11.0 or newer), and the
 TypeScript SDK, the CLI and the MCP server send them there, but this client's cloud mode does not
 yet: in cloud mode each is an `OortRefusedError` (`local-only`) before any request.
 

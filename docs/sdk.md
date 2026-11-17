@@ -107,7 +107,7 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | ---------------------------------------------- | ------------------------------------------ | ----- | ------------------------- |
 | `recall(query, opts?)`                         | `RecallResult`                             | yes   | yes                       |
 | `observe(turn, { signal? })`                   | `ObserveResult`                            | yes   | yes                       |
-| `remember(facts, { type?, place? })`           | `RememberResult`                           | yes   | yes (`place` after 0.10.0) |
+| `remember(facts, { type?, place? })`           | `RememberResult`                           | yes   | yes (`place` from 0.11.0) |
 | `forget(id, { everywhere? })`                  | `{ forgotten, rewritten?, notRewritten?, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
 | `pin(id)` / `unpin(id)`                        | `{ id, pinned, changed }`                  | yes   | yes (`changed: null`)     |
 | `recent({ since?, limit? })`                   | `{ memories, warnings }`                   | yes   | yes                       |
@@ -144,7 +144,7 @@ read: `self`, `planet`, `star`, `constellation`, `galaxy`), `budgetChars` (the d
 for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `fast`: no rerank;
 `lexical`: no model call), `inferTime` (default true, as the CLI does: a past time in the query ranks the results, and a
 question about a state then, "which port did we use on 2 April", picks as-of),
-`within` and `near` (spatial memory: 0.9.0 or newer locally, after 0.10.0 in Oort Cloud; see
+`within` and `near` (spatial memory: 0.9.0 or newer locally, 0.11.0 or newer in Oort Cloud; see
 [Spatial memory](#spatial-memory)) and `signal`.
 
 **`forget` locally** also rewrites the later memories of the forgotten one's supersede chain that
@@ -543,7 +543,7 @@ await oort.close();
 - **An end user gets their Planet only, never a Star.** Today an agent's Star is kept per org and
   agent, not per user, so it would leak between users. `include: ['star']` on a user handle is
   `refused`, and an agent configured as a Star together with `user` is refused (`star-with-user`).
-  Per-user agent memory comes with CON-92.
+  Per-user agent memory (a Star per end user) is not available yet.
 - **`user` needs an explicit `org` other than `local`**, and `scoped({ user: 'self' })` is refused
   (`self-not-derivable`).
 - **An end user's id** is 1 to 128 characters: a letter or digit first, then letters, digits and
@@ -807,7 +807,7 @@ your Oort account); `whoami().routes` says which applies to each role.
 | `remember` | One observe per fact | as above | One metered observe per fact |
 | `judge.record` | One Voyage embed | none | Metered as one Oort Cloud save |
 | `judge.apply` | One Voyage embed and one TypeSafe judge call | TypeSafe judge only | Metered as one Oort Cloud recall |
-| `forget` | None, unless later memories of its chain restate one of its values: then one Anthropic writer call (that memory's text only) and one Voyage embed for each (CON-144) | The writer call still needs a key; the embed is local | No model call |
+| `forget` | None, unless later memories of its chain restate one of its values: then one Anthropic writer call (that memory's text only) and one Voyage embed for each (0.10.0 or newer) | The writer call still needs a key; the embed is local | No model call |
 | `judge.resolve` | One Voyage embed when it records a judgment, else none | none | `refused` |
 | `pin`, `unpin`, `link`, `unlink`, `explain`, `recent`, `judge.list`, `judge.confirm`, `judge.withdraw`, `judge.experts`, `judge.listPredictions`, `judge.getPrediction`, `judge.forgetPrediction`, `judge.evalLive`, `consolidate`, `whoami` | none | none | No model call |
 
@@ -1188,7 +1188,7 @@ A robot that remembers where it saw each tool can then ask which toolboxes are i
 is within 1.5 m of it, and get only the memories from there. `within` and `near` filter before
 ranking and before `limit` is taken.
 
-Places need 0.9.0 or newer on the local engine, and a version after 0.10.0 in Oort Cloud. The same
+Places need 0.9.0 or newer on the local engine, and 0.11.0 or newer in Oort Cloud. The same
 calls, options and checks work in both modes. In Oort Cloud:
 
 - A spatial recall reads only your own memories, never a Constellation. The SDK checks the answer
@@ -1210,7 +1210,7 @@ calls, options and checks work in both modes. In Oort Cloud:
 import { createOort, type Place } from 'oortmem';
 
 // A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
-// on the local engine (0.9.0 or newer) and on Oort Cloud (after 0.10.0).
+// on the local engine (0.9.0 or newer) and on Oort Cloud (0.11.0 or newer).
 await using oort = await createOort();
 
 const room = (r: string, x: number, y: number, at?: string): Place => ({

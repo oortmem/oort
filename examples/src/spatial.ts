@@ -1,7 +1,7 @@
 import { createOort, type Place } from 'oortmem';
 
 // A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
-// on the local engine (0.9.0 or newer) and on Oort Cloud (after 0.10.0).
+// on the local engine (0.9.0 or newer) and on Oort Cloud (0.11.0 or newer).
 await using oort = await createOort();
 
 const room = (r: string, x: number, y: number, at?: string): Place => ({
