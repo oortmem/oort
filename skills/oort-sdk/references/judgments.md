@@ -3,7 +3,7 @@
 Judgment memory keeps an expert's decisions (a content reviewer, a lawyer, a code reviewer) with
 the reason in their own words, then predicts how they would judge a new item from those
 precedents, citing them, or says it needs the expert. It is the same store as `oort judge` and the
-MCP tools `record_judgment` and `judge`. In cloud mode (after 0.10.0) an Oort key acts in the
+MCP tools `record_judgment` and `judge`. In cloud mode (0.11.0 or newer) an Oort key acts in the
 agent role: see "In Oort Cloud" below.
 
 <!-- example: examples/src/judgments.ts -->
@@ -65,10 +65,10 @@ decided: a review UI, an import job. `scoped({ judgeRole: 'agent' })` narrows a 
 the agent role; nothing widens it. Framework tools (`oortmem/ai-sdk`) always run in the agent
 role.
 
-`judge.withdraw(id)` (after 0.10.0) takes a judgment back; it is the expert role's, like
+`judge.withdraw(id)` (0.11.0 or newer) takes a judgment back; it is the expert role's, like
 `confirm`. `judge.experts.get()` returns the experts list.
 
-## In Oort Cloud (after 0.10.0)
+## In Oort Cloud (0.11.0 or newer)
 
 The credential sets the role: an Oort key acts in the agent role.
 
@@ -138,7 +138,7 @@ instructions), `by`, `similarity`, `confirmed` and `agentRecorded`.
 precedents' reasons to TypeSafe. In a regulated domain treat every answer as a suggestion a
 person confirms.
 
-## Resolving predictions (after 0.10.0)
+## Resolving predictions (0.11.0 or newer)
 
 `judge.apply` keeps each answer as a prediction and returns its `predictionId`. When the person
 decides, `judge.resolve` records it, and `judge.evalLive` reports how often the predictions
@@ -202,7 +202,7 @@ console.log(live.resolved, live.bands.length);
 - Withdrawing or forgetting a judgment removes the text of the predictions that cited it.
   Forgetting a prediction leaves the judgment its resolve recorded.
 
-## Where a label came from (after 0.10.0)
+## Where a label came from (0.11.0 or newer)
 
 Each judgment, prediction resolution and feedback row records an `origin`: how the label
 arrived. It is not proof that a person made it.
@@ -276,7 +276,7 @@ console.log(shown(draft.id)); // integration grace@example.com agent
 - The training export takes only `interactive`, `dashboard` and `connector` labels by default,
   and never `agent` ones.
 
-## Training export (after 0.10.0)
+## Training export (0.11.0 or newer)
 
 `exportTraining({ kind, out, ... })` writes the labels people gave as fine-tuning JSON Lines in
 the directory `out`: `sft.jsonl` (one chat row per judgment), `preference.jsonl` (`prompt`,

@@ -71,24 +71,22 @@ Every command except `oort hook`, `oort mcp` and a foreground `oort serve` takes
 `OORT_OUTPUT=json`) and prints one `oort.v1` envelope on stdout. That is the contract for
 Python today and for any other language. See [cli-and-python.md](cli-and-python.md).
 
-## Not in 0.10.0
+## Not in 0.11.0
 
 - A TypeScript `remote` mode. `oort serve --listen` (service mode) and the Python client's
   `mode="remote"` ship in 0.7.0; the TypeScript SDK has `local` and `cloud` only.
-- Per-user agent memory (a Star per end user) comes with CON-92.
-- Spatial memory (`place`, `near`, `within`) in Oort Cloud. In 0.10.0 cloud mode refuses them
-  (`local-only`); after 0.10.0 the TypeScript SDK, the CLI and the MCP server send them to Oort
-  Cloud (the Python client's cloud mode still refuses them). In 0.8.0 or older, passing them is a
-  usage error.
-- Memory links. `link`, `unlink`, `oort link`, `oort unlink`, the MCP `link` tool and recall
-  following a link for one hop come after 0.10.0, in local mode only (see
-  [sdk.md](sdk.md#memory-links-local-mode-after-0100)). In 0.10.0 no method, option or field
-  links memories.
-- Reporting Oort Cloud's `forget` rewrites. Locally (0.10.0 or newer), `forget(id)` rewrites the later
-  memories of its chain that restate one of its values and lists them in `rewritten` and
-  `notRewritten`. In cloud mode 0.10.0 has neither field, and the CLI's `oort forget` finds each
-  such memory itself and names it in a `not-rewritten` warning. Newer versions read both lists from
-  Oort Cloud's forget answer when it carries them.
+- Per-user agent memory (a Star per end user). A Star is shared by every user of the agent, so
+  `scoped({ user })` on an agent configured as a Star is refused (`star-with-user`).
+- Memory links in Oort Cloud. `link`, `unlink`, `oort link`, `oort unlink` and the MCP `link` tool
+  work in local mode only (see [sdk.md](sdk.md#memory-links-local-mode-0110-or-newer)); cloud mode
+  refuses them (`local-only`) and its recall follows no link.
+- Recall feedback, prediction resolution (`judge.resolve`, `judge.listPredictions`,
+  `judge.getPrediction`, `judge.forgetPrediction`, `judge.evalLive`) and the training export in
+  Oort Cloud. Cloud mode refuses them (`local-only`). `judge.record`, `judge.apply` and
+  `judge.list` work in both modes from 0.11.0.
+- Places and judgments in the Python client's cloud mode. The TypeScript SDK, the CLI and the MCP
+  server send `place`, `near` and `within` to Oort Cloud from 0.11.0; the Python client still
+  refuses them in cloud mode (`local-only`), and keeps judgments local only.
 - `store.vectorIndex: 'auto'` choosing the RaBitQ index. `rabitq` (0.10.0 or newer) is opt-in;
   `auto` never builds it. Its native engine ships for macOS arm64 and Linux x64 and arm64 (glibc);
   anywhere else the same index runs in TypeScript.

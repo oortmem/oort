@@ -130,7 +130,7 @@ hold only Planet memories. A reader maps a version 1 line to the Planet its
 account moves it to that account's Planet. `oort cloud import` uploads
 version 1, which Oort Cloud reads, and `oort cloud export` returns what Oort
 Cloud writes. Version 1 holds no `place`, but Oort Cloud's import takes one on
-a version 1 line (after 0.10.0), so `oort cloud import` sends each memory with
+a version 1 line (0.11.0 or newer), so `oort cloud import` sends each memory with
 its `place`, checked by Oort Cloud with core's rules. It skips memories already
 in Oort Cloud, so one uploaded by an earlier version stays there without its
 place.

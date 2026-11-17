@@ -152,7 +152,7 @@ export interface Pose {
 }
 
 /**
- * Where a memory is (spatial memory): 0.9.0 or newer locally, after 0.10.0 in Oort Cloud, with
+ * Where a memory is (spatial memory): 0.9.0 or newer locally, 0.11.0 or newer in Oort Cloud, with
  * the same rules in both modes.
  */
 export interface Place {
@@ -658,7 +658,7 @@ export interface RecallOptions {
   inferTime?: boolean;
   /**
    * Only memories whose place path contains this path as whole segments (`room:B` keeps
-   * `site:hq/room:B/shelf:B3`, never `room:B2`). 0.9.0 or newer; in Oort Cloud after 0.10.0,
+   * `site:hq/room:B/shelf:B3`, never `room:B2`). 0.9.0 or newer; in Oort Cloud 0.11.0 or newer,
    * reading only your own memories (never a Constellation).
    */
   within?: string;
@@ -680,7 +680,7 @@ export interface Turn {
   sessionId?: string;
   /** At most 128 characters; deduplicated by Oort Cloud only. */
   turnRef?: string;
-  /** Where this turn happened: the memories it writes carry it. 0.9.0 or newer (Oort Cloud: after 0.10.0). */
+  /** Where this turn happened: the memories it writes carry it. 0.9.0 or newer (Oort Cloud: 0.11.0 or newer). */
   place?: Place;
 }
 

@@ -32,25 +32,25 @@ console.log(memories.map((m) => m.text));
 Every option object is checked strictly: an unknown key, or an option the mode does not take
 (`keys.voyage` with `mode: 'cloud'`), throws `OortUsageError`.
 
-| Option          | Modes                                             | Default and meaning                                                                                                 |
-| --------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `mode`          | all                                               | `'auto'`; or `'local'`, `'cloud'`                                                                                   |
-| `home`          | local, auto                                       | `OORT_HOME`, else `~/.oort`                                                                                         |
-| `cwd`           | all                                               | `process.cwd()`; used only to find the project and its config                                                       |
-| `project`       | all                                               | derived from `cwd` as the CLI does; a string becomes `cfg:<id>`; `null` means global memories only                  |
-| `projectConfig` | local, cloud                                      | `true`; `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout)                        |
-| `agent`         | all                                               | `OORT_AGENT`, else anonymous (the Planet only)                                                                      |
-| `user`          | local                                             | unset: the person. Setting it requires `org`                                                                        |
-| `org`           | local                                             | `'local'`. Required, and not `'local'`, whenever `user` is set                                                      |
-| `keys`          | local; cloud (`oort` only)                        | none: `{ voyage?, typesafe?, anthropic?, oort? }`                                                                   |
-| `keySources`    | all                                               | `['explicit', 'env', 'keychain']`; `keychain` is skipped with `OORT_NO_KEYCHAIN=1`                                  |
-| `config`        | local                                             | none: a deep partial of the home config, laid over it (`serve` cannot be set)                                       |
-| `url`           | cloud                                             | `OORT_CLOUD_URL`, else `https://api.oortcloud.dev`                                                                  |
-| `timeoutMs`     | cloud                                             | 30 000 per request                                                                                                  |
-| `migrate`       | local                                             | `true`; `false` refuses an older store (`refused`, `migration-required`)                                            |
-| `env`           | all                                               | `process.env`                                                                                                       |
-| `fetch`         | cloud                                             | a keep-alive connection pool                                                                                        |
-| `judge`         | local; cloud (`role: 'agent'` only, after 0.10.0) | `{ role: 'agent' }`; `{ role: 'expert', operator? }` only where a person decides (see [judgments.md](judgments.md)) |
+| Option          | Modes                                                | Default and meaning                                                                                                 |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `mode`          | all                                                  | `'auto'`; or `'local'`, `'cloud'`                                                                                   |
+| `home`          | local, auto                                          | `OORT_HOME`, else `~/.oort`                                                                                         |
+| `cwd`           | all                                                  | `process.cwd()`; used only to find the project and its config                                                       |
+| `project`       | all                                                  | derived from `cwd` as the CLI does; a string becomes `cfg:<id>`; `null` means global memories only                  |
+| `projectConfig` | local, cloud                                         | `true`; `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout)                        |
+| `agent`         | all                                                  | `OORT_AGENT`, else anonymous (the Planet only)                                                                      |
+| `user`          | local                                                | unset: the person. Setting it requires `org`                                                                        |
+| `org`           | local                                                | `'local'`. Required, and not `'local'`, whenever `user` is set                                                      |
+| `keys`          | local; cloud (`oort` only)                           | none: `{ voyage?, typesafe?, anthropic?, oort? }`                                                                   |
+| `keySources`    | all                                                  | `['explicit', 'env', 'keychain']`; `keychain` is skipped with `OORT_NO_KEYCHAIN=1`                                  |
+| `config`        | local                                                | none: a deep partial of the home config, laid over it (`serve` cannot be set)                                       |
+| `url`           | cloud                                                | `OORT_CLOUD_URL`, else `https://api.oortcloud.dev`                                                                  |
+| `timeoutMs`     | cloud                                                | 30 000 per request                                                                                                  |
+| `migrate`       | local                                                | `true`; `false` refuses an older store (`refused`, `migration-required`)                                            |
+| `env`           | all                                                  | `process.env`                                                                                                       |
+| `fetch`         | cloud                                                | a keep-alive connection pool                                                                                        |
+| `judge`         | local; cloud (`role: 'agent'` only, 0.11.0 or newer) | `{ role: 'agent' }`; `{ role: 'expert', operator? }` only where a person decides (see [judgments.md](judgments.md)) |
 
 **Keys.** Each model role (embed, rerank, decide, write) uses the first key found: `keys.<vendor>`,
 then `VOYAGE_API_KEY`, `TYPESAFE_API_KEY` or `ANTHROPIC_API_KEY`, then the Keychain (or
@@ -63,37 +63,37 @@ usage error.
 
 ## Methods
 
-| Method                                                                                                                                                          | Returns                                            | Cloud mode                                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- |
-| `recall(query, opts?)`                                                                                                                                          | `RecallResult`                                     | yes                                                               |
-| `observe(turn, { signal? })`                                                                                                                                    | `ObserveResult`                                    | yes                                                               |
-| `remember(facts, { type?, place? })`                                                                                                                            | `RememberResult`                                   | yes (`place` after 0.10.0)                                        |
-| `forget(id, { everywhere? })`                                                                                                                                   | `ForgetResult`                                     | yes (`everywhere`: cloud only)                                    |
-| `pin(id)` / `unpin(id)`                                                                                                                                         | `PinResult`                                        | yes (`changed: null`)                                             |
-| `recent({ since?, limit? })`                                                                                                                                    | `{ memories, warnings }`                           | yes                                                               |
-| `explain(id)`                                                                                                                                                   | `Explanation`                                      | yes (`links`, after 0.10.0, is empty)                             |
-| `link(from, to)` / `unlink(from, to)` (after 0.10.0)                                                                                                            | `LinkResult` / `UnlinkResult`                      | `refused` (`local-only`)                                          |
-| `whoami()`                                                                                                                                                      | `Whoami`                                           | yes                                                               |
-| `judge.record(input)`                                                                                                                                           | `RecordJudgmentView`                               | yes, agent role (after 0.10.0)                                    |
-| `judge.apply(item, opts?)`                                                                                                                                      | `JudgeResult`                                      | yes, no `predictionId` (after 0.10.0)                             |
-| `judge.list({ domain?, by?, all?, limit? })`                                                                                                                    | `{ judgments }`                                    | yes (after 0.10.0)                                                |
-| `judge.confirm(id, { reviewer? })`                                                                                                                              | `{ id, changed }` (expert role)                    | `refused` (`expert-only`: the dashboard)                          |
-| `judge.withdraw(id)` (after 0.10.0)                                                                                                                             | `{ id, withdrawn, changed, by }` (expert role)     | `refused` (`expert-only`: the dashboard)                          |
-| `judge.experts.get()` / `judge.experts.set(experts)` (after 0.10.0)                                                                                             | `{ experts }` (`set` locally: `experts-in-config`) | `get`; `set`: `refused` (`expert-only`)                           |
-| `judge.resolve(predictionId, input)` (after 0.10.0)                                                                                                             | `ResolveView`                                      | `refused`                                                         |
-| `judge.listPredictions({ status?, limit?, domain? })` (after 0.10.0)                                                                                            | `{ predictions }`                                  | `refused`                                                         |
-| `judge.getPrediction(id)` / `judge.forgetPrediction(id)` (after 0.10.0)                                                                                         | `PredictionView` / `{ id, forgotten }`             | `refused`                                                         |
-| `judge.evalLive({ domain?, includeAgentResolved? })` (after 0.10.0)                                                                                             | `LiveEvalView`                                     | `refused`                                                         |
-| `feedback({ memoryId, signal, note?, query?, reviewer? })` (after 0.10.0)                                                                                       | `FeedbackResultView`                               | `refused`                                                         |
-| `feedback.list(opts?)` / `feedback.confirm(id, { reviewer? })` / `feedback.retire(id)` / `feedback.supersede(id, fact)` / `feedback.dismiss(id)` (after 0.10.0) | `{ feedback }` / views (expert role resolves)      | `refused`                                                         |
-| `exportTraining({ kind, out, expert?, since?, split?, include?, exclude?, force? })` (after 0.10.0)                                                             | `TrainingExportView` (expert role)                 | `refused`                                                         |
-| `consolidate({ budgetMs?, signal? })`                                                                                                                           | `ConsolidateResult`                                | `refused`                                                         |
-| `scoped({ user?, project?, agent?, judgeRole? })`                                                                                                               | a new handle                                       | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
-| `endUsers.erase(user)`                                                                                                                                          | `EndUserErasure`                                   | 0.8.0, a server key                                               |
-| `endUsers.count()`                                                                                                                                              | `EndUserCount`                                     | 0.8.0, a server key                                               |
-| `endUsers.export(user)`                                                                                                                                         | `EndUserExport`                                    | 0.8.0, a server key                                               |
-| `close()`, `[Symbol.asyncDispose]()`                                                                                                                            | `void`                                             |                                                                   |
-| `formatForPrompt(result, { budgetChars? })`                                                                                                                     | `string` (a function, not a method)                | both                                                              |
+| Method                                                                                                                                                             | Returns                                            | Cloud mode                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------- |
+| `recall(query, opts?)`                                                                                                                                             | `RecallResult`                                     | yes                                                               |
+| `observe(turn, { signal? })`                                                                                                                                       | `ObserveResult`                                    | yes                                                               |
+| `remember(facts, { type?, place? })`                                                                                                                               | `RememberResult`                                   | yes (`place` 0.11.0 or newer)                                     |
+| `forget(id, { everywhere? })`                                                                                                                                      | `ForgetResult`                                     | yes (`everywhere`: cloud only)                                    |
+| `pin(id)` / `unpin(id)`                                                                                                                                            | `PinResult`                                        | yes (`changed: null`)                                             |
+| `recent({ since?, limit? })`                                                                                                                                       | `{ memories, warnings }`                           | yes                                                               |
+| `explain(id)`                                                                                                                                                      | `Explanation`                                      | yes (`links`, 0.11.0 or newer, is empty)                          |
+| `link(from, to)` / `unlink(from, to)` (0.11.0 or newer)                                                                                                            | `LinkResult` / `UnlinkResult`                      | `refused` (`local-only`)                                          |
+| `whoami()`                                                                                                                                                         | `Whoami`                                           | yes                                                               |
+| `judge.record(input)`                                                                                                                                              | `RecordJudgmentView`                               | yes, agent role (0.11.0 or newer)                                 |
+| `judge.apply(item, opts?)`                                                                                                                                         | `JudgeResult`                                      | yes, no `predictionId` (0.11.0 or newer)                          |
+| `judge.list({ domain?, by?, all?, limit? })`                                                                                                                       | `{ judgments }`                                    | yes (0.11.0 or newer)                                             |
+| `judge.confirm(id, { reviewer? })`                                                                                                                                 | `{ id, changed }` (expert role)                    | `refused` (`expert-only`: the dashboard)                          |
+| `judge.withdraw(id)` (0.11.0 or newer)                                                                                                                             | `{ id, withdrawn, changed, by }` (expert role)     | `refused` (`expert-only`: the dashboard)                          |
+| `judge.experts.get()` / `judge.experts.set(experts)` (0.11.0 or newer)                                                                                             | `{ experts }` (`set` locally: `experts-in-config`) | `get`; `set`: `refused` (`expert-only`)                           |
+| `judge.resolve(predictionId, input)` (0.11.0 or newer)                                                                                                             | `ResolveView`                                      | `refused`                                                         |
+| `judge.listPredictions({ status?, limit?, domain? })` (0.11.0 or newer)                                                                                            | `{ predictions }`                                  | `refused`                                                         |
+| `judge.getPrediction(id)` / `judge.forgetPrediction(id)` (0.11.0 or newer)                                                                                         | `PredictionView` / `{ id, forgotten }`             | `refused`                                                         |
+| `judge.evalLive({ domain?, includeAgentResolved? })` (0.11.0 or newer)                                                                                             | `LiveEvalView`                                     | `refused`                                                         |
+| `feedback({ memoryId, signal, note?, query?, reviewer? })` (0.11.0 or newer)                                                                                       | `FeedbackResultView`                               | `refused`                                                         |
+| `feedback.list(opts?)` / `feedback.confirm(id, { reviewer? })` / `feedback.retire(id)` / `feedback.supersede(id, fact)` / `feedback.dismiss(id)` (0.11.0 or newer) | `{ feedback }` / views (expert role resolves)      | `refused`                                                         |
+| `exportTraining({ kind, out, expert?, since?, split?, include?, exclude?, force? })` (0.11.0 or newer)                                                             | `TrainingExportView` (expert role)                 | `refused`                                                         |
+| `consolidate({ budgetMs?, signal? })`                                                                                                                              | `ConsolidateResult`                                | `refused`                                                         |
+| `scoped({ user?, project?, agent?, judgeRole? })`                                                                                                                  | a new handle                                       | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
+| `endUsers.erase(user)`                                                                                                                                             | `EndUserErasure`                                   | 0.8.0, a server key                                               |
+| `endUsers.count()`                                                                                                                                                 | `EndUserCount`                                     | 0.8.0, a server key                                               |
+| `endUsers.export(user)`                                                                                                                                            | `EndUserExport`                                    | 0.8.0, a server key                                               |
+| `close()`, `[Symbol.asyncDispose]()`                                                                                                                               | `void`                                             |                                                                   |
+| `formatForPrompt(result, { budgetChars? })`                                                                                                                        | `string` (a function, not a method)                | both                                                              |
 
 **`recall` options.** `limit` (1 to 50, default 10), `mode` (`current`, `as-of`, `history`,
 `known-at`), `asOf` (valid time), `knownAt` (transaction time), `include` (narrows the levels
@@ -154,7 +154,7 @@ are: `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?, geo?, sigma? }`, w
 keeps memories whose path contains those whole segments; `near: { mapId, frame?, pose, radius }`
 keeps those within `radius` metres on the same map and frame. Both filter before ranking and
 `limit`, and compose with the time modes. Recalled memories carry `place`, `why.placePath` and
-`why.distanceM`. `frame: 'odom'` is refused. Oort Cloud takes all three after 0.10.0, with the
+`why.distanceM`. `frame: 'odom'` is refused. Oort Cloud takes all three (0.11.0 or newer), with the
 same checks: a spatial recall there reads only your own memories (never a Constellation), the
 SDK keeps only your own memories that match the filter and refuses the recall if Oort Cloud does
 not confirm it applied the filter, and a `near` whose region holds more than 2,000 placed
@@ -168,7 +168,7 @@ reason, asking for a smaller radius or a `within`. In
 import { createOort, type Place } from 'oortmem';
 
 // A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
-// on the local engine (0.9.0 or newer) and on Oort Cloud (after 0.10.0).
+// on the local engine (0.9.0 or newer) and on Oort Cloud (0.11.0 or newer).
 await using oort = await createOort();
 
 const room = (r: string, x: number, y: number, at?: string): Place => ({
@@ -297,10 +297,7 @@ const { memories } = await oort.recall('when does the billing service deploy?');
 console.log(memories.map((m) => m.text).join('\n'));
 ```
 
-## Memory links (local mode, after 0.10.0)
-
-Not in 0.10.0: `link`, `unlink`, `Explanation.links` and `why.via` come in the release after it.
-On 0.10.0, do not call them.
+## Memory links (local mode, 0.11.0 or newer)
 
 `link(from, to)` says two memories belong together, so a recall that finds one can bring the
 other along; `unlink` removes it, or blocks a pair that was not linked. Both memories must be
@@ -338,10 +335,7 @@ const removed = await oort.unlink(deploys!, freeze!);
 console.log(removed.removed); // true
 ```
 
-## Recall feedback (local mode, after 0.10.0)
-
-Not in 0.10.0: `feedback` and `RecalledMemory.contested` come in the release after it. On 0.10.0,
-do not call them.
+## Recall feedback (local mode, 0.11.0 or newer)
 
 `feedback({ memoryId, signal, note?, query? })` says a recalled memory `helped`, is `wrong`, is
 `stale`, or was `irrelevant` to `query` (required for that signal). There is no recall log: name
