@@ -29,8 +29,8 @@ from ._validate import (
     check_query,
     check_recall,
     check_recent,
+    check_remember,
     check_turn,
-    check_type,
     check_user,
     place_wire,
     turn_wire,
@@ -475,7 +475,9 @@ class Oort:
         ``known-at`` with ``known_at``, ``history``); with neither date nor mode, a date in the
         query ("on 2 April") picks one unless ``infer_time=False``. ``within`` (a place path,
         whole segments) and ``near`` (a ``NearQuery`` or mapping) keep only memories there
-        (0.9.0 or newer; local mode only)."""
+        (0.9.0 or newer). In Oort Cloud a spatial recall reads only your own memories, never a
+        Constellation, and a ``near`` whose region holds more than 2,000 placed memories is an
+        ``OortUsageError``."""
         opts: Dict[str, Any] = {
             "limit": limit,
             "mode": mode,
@@ -487,7 +489,7 @@ class Oort:
             "speed": speed,
             "inferTime": infer_time,
             "within": within,
-            "near": None if near is None else place_wire(near),
+            "near": None if near is None else place_wire(near, "recall options", "near"),
         }
         opts = {k: v for k, v in opts.items() if v is not None}
 
@@ -496,28 +498,23 @@ class Oort:
             return _recall_result(data, budget_chars)
 
         def cloud(c: CloudOps, p: CloudPrincipal) -> RecallResult:
-            # Oort Cloud holds no places yet: refused before anything is sent.
-            if within is not None or near is not None:
-                raise local_only("Spatial recall (near, within)")
             q = check_query(query)
-            check_recall(opts)
-            return _recall_result(c.recall(p, q, opts, view_of(opts)), budget_chars)
+            spatial = check_recall(opts)
+            return _recall_result(c.recall(p, q, opts, view_of(opts), spatial), budget_chars)
 
         return self._run(local, cloud)
 
     def observe(self, turn: Union[Turn, Mapping[str, Any], None] = None, /, **fields: Any) -> ObserveResult:
         """Run the write path on one turn: ``observe(user=..., assistant=...)``, or a ``Turn`` /
-        mapping (``user``, ``assistant``, ``tools``, ``at``, ``session_id``, ``turn_ref``). It
-        scrubs, gates, writes and reconciles, and can take seconds: call it after answering."""
+        mapping (``user``, ``assistant``, ``tools``, ``at``, ``session_id``, ``turn_ref``,
+        ``place``). It scrubs, gates, writes and reconciles, and can take seconds: call it after
+        answering."""
         if turn is not None and fields:
             raise _usage("observe takes a turn or its fields, not both.")
         t = turn_wire(turn if turn is not None else fields)
 
         def cloud(c: CloudOps, p: CloudPrincipal) -> ObserveResult:
-            if t.get("place") is not None:
-                raise local_only("A place")
-            check_turn(t)
-            return from_wire(ObserveResult, c.observe(p, t))
+            return from_wire(ObserveResult, c.observe(p, check_turn(t)))
 
         return self._run(lambda d, h: from_wire(ObserveResult, d.call("POST", "/v1/observe", h, t)), cloud)
 
@@ -530,7 +527,7 @@ class Oort:
     ) -> RememberResult:
         """Save up to 5 facts (500 characters each) through the write path, each framed as
         something the user said. ``place`` (a ``Place`` or mapping) tags every fact (0.9.0 or
-        newer; local mode only)."""
+        newer)."""
         lst = [facts] if isinstance(facts, str) else facts
         body: Dict[str, Any] = {"facts": list(lst) if isinstance(lst, (list, tuple)) else lst}
         if type is not None:
@@ -539,11 +536,9 @@ class Oort:
             body["place"] = place_wire(place)
 
         def cloud(c: CloudOps, p: CloudPrincipal) -> RememberResult:
-            if place is not None:
-                raise local_only("A place")
             fs = check_facts(facts)
-            check_type(type)
-            return from_wire(RememberResult, c.remember(p, fs, type))
+            checked = check_remember(type, body.get("place"))
+            return from_wire(RememberResult, c.remember(p, fs, type, checked))
 
         return self._run(lambda d, h: from_wire(RememberResult, d.call("POST", "/v1/remember", h, body)), cloud)
 

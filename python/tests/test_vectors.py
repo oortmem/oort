@@ -1,6 +1,7 @@
 """The golden vectors the TypeScript SDK writes (packages/cli/src/sdk/python.test.ts) and both SDKs
-check: ``format_for_prompt`` character for character, Oort Cloud's refusals as typed errors, and
-the daemon's error envelope as typed errors."""
+check: ``format_for_prompt`` character for character, Oort Cloud's refusals as typed errors, the
+daemon's error envelope as typed errors, and places (core's checks, distances and a remember's
+turn ref)."""
 
 import base64
 import json
@@ -211,6 +212,90 @@ class DaemonErrors(unittest.TestCase):
 
         self.assertIsInstance(error_from_envelope({"code": "new-code", "message": "x"}), OortInternalError)
         self.assertIsInstance(error_from_envelope(None), OortInternalError)
+
+
+@NEEDS_310
+class Places(unittest.TestCase):
+    """Places in cloud mode: core's checks (refused with core's own words), the distance and
+    filter rules, and a remember's turn ref, each as the TypeScript SDK applies them."""
+
+    def _checked(self, fn, v):
+        from oortmem._place import PlaceError
+
+        try:
+            return {"output": fn(v)}
+        except PlaceError as e:
+            return {"error": str(e)}
+
+    def test_each_place_path_is_checked_as_in_typescript(self):
+        from oortmem._place import check_place_path
+
+        for v in load("places.json")["paths"]:
+            with self.subTest(path=v["input"]):
+                want = {k: v[k] for k in ("output", "error") if k in v}
+                self.assertEqual(self._checked(lambda x: check_place_path(x, "within"), v["input"]), want)
+
+    def test_each_place_and_near_is_checked_as_in_typescript(self):
+        from oortmem._place import check_near, check_place
+
+        c = load("places.json")
+        for kind, fn in (("places", check_place), ("nears", check_near)):
+            for v in c[kind]:
+                with self.subTest(kind=kind, value=v["input"]):
+                    want = {k: v[k] for k in ("output", "error") if k in v}
+                    got = self._checked(fn, v["input"])
+                    self.assertEqual(got, want)
+                    if "output" in got:
+                        # The same fields in the same order, as core returns them.
+                        self.assertEqual(json.dumps(got["output"]), json.dumps(want["output"]))
+
+    def test_each_filter_matches_and_measures_as_in_typescript(self):
+        from oortmem._place import matches_spatial, place_distance
+
+        for v in load("places.json")["filters"]:
+            with self.subTest(filter=v["filter"], place=v["place"]):
+                self.assertEqual(matches_spatial(v["place"], v["filter"]), v["matches"])
+                near = v["filter"].get("near")
+                d = None if near is None else place_distance(v["place"], near)
+                if v["distanceM"] is None:
+                    self.assertIsNone(d)
+                else:
+                    self.assertAlmostEqual(d, v["distanceM"], places=12)
+
+    def test_each_number_is_written_as_javascript_writes_it(self):
+        from oortmem._place import js_number
+
+        for v in load("places.json")["numbers"]:
+            with self.subTest(number=v["input"]):
+                self.assertEqual(js_number(float(v["input"])), v["json"])
+
+    def test_each_turn_ref_is_byte_for_byte_typescripts(self):
+        from oortmem._place import check_place, remember_turn_ref, scrubbed_fact
+
+        for v in load("places.json")["turnRefs"]:
+            # The same text with each astral character held as two surrogate code points, as a
+            # Python string can hold it: the same ref.
+            for split in (False, True):
+                fact = split_pairs(v["fact"]) if split else v["fact"]
+                raw = v["place"]
+                if split and raw is not None and "nodeId" in raw:
+                    raw = {**raw, "nodeId": split_pairs(raw["nodeId"])}
+                with self.subTest(fact=ascii(fact), place=ascii(raw)):
+                    place = None if raw is None else check_place(raw)
+                    self.assertEqual(remember_turn_ref(fact, v["type"], v["project"], v["at"], place), v["turnRef"])
+                    self.assertEqual(remember_turn_ref(scrubbed_fact(fact), v["type"], v["project"], v["at"], place), v["request"])
+
+
+def split_pairs(s):
+    """``s`` with each character outside the BMP as two surrogate code points."""
+    out = []
+    for c in s:
+        o = ord(c)
+        if o > 0xFFFF:
+            out.append(chr(0xD800 + ((o - 0x10000) >> 10)) + chr(0xDC00 + ((o - 0x10000) & 0x3FF)))
+        else:
+            out.append(c)
+    return "".join(out)
 
 
 if __name__ == "__main__":

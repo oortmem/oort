@@ -17,6 +17,18 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from . import __version__
 from ._format import _ms
+from ._place import (
+    PlaceError,
+    check_place_path,
+    check_spatial_filter,
+    checked_place,
+    js_json_text,
+    js_text,
+    matches_spatial,
+    place_distance,
+    remember_turn_ref,
+    scrubbed_fact,
+)
 from ._scrub import clean_field as _clean
 from ._secret import _Secret
 from ._transport import DaemonOutdated, TcpTransport, Unreachable
@@ -48,6 +60,11 @@ def end_users_allowed(me: Any) -> bool:
     caps = me.get("capabilities") if isinstance(me, Mapping) else None
     return isinstance(caps, list) and END_USERS_CAPABILITY in caps
 _OUTCOMES = ("added", "reinforced", "updated", "superseded", "corrected", "skipped")
+#: Oort Cloud answered a spatial recall without saying it applied the filter (as the TypeScript SDK).
+SPATIAL_NOT_APPLIED = (
+    "Oort Cloud did not apply the place filter (within, near), so nothing was returned. "
+    "Update Oort Cloud, or try again."
+)
 
 
 def cloud_url(raw: Optional[str]) -> str:
@@ -129,6 +146,9 @@ def memory_view(m: Mapping[str, Any], now_ms: float) -> Dict[str, Any]:
     origin = _origin(m.get("origin"))
     if origin is not None:
         out["origin"] = origin
+    place = checked_place(m["place"]) if "place" in m else None
+    if place is not None:
+        out["place"] = place
     return out
 
 
@@ -140,10 +160,93 @@ def _recalled(m: Mapping[str, Any], now_ms: float) -> Dict[str, Any]:
             why[k] = e[k]
     if e.get("chain") is True:
         why["chain"] = True
+    for k in ("placePath", "distanceM"):
+        if e.get(k) is not None:
+            why[k] = e[k]
     out = {**memory_view(m, now_ms), "score": e.get("fused", 0), "why": why}
     if e.get("stale") is True:
         out["stale"] = True
     return out
+
+
+def _with_place(m: Any) -> Any:
+    """A memory from Oort Cloud with its place as core's rules read it: one they refuse is left
+    out, never passed on as sent."""
+    if not isinstance(m, Mapping) or "place" not in m:
+        return m
+    out = {k: v for k, v in m.items() if k != "place"}
+    place = checked_place(m["place"])
+    if place is not None:
+        out["place"] = place
+    return out
+
+
+def _places_checked(m: Any) -> Any:
+    """A recalled memory with its place checked (``_with_place``), its place path one core's rules
+    accept and its distance a finite number of metres from 0; anything else is left out."""
+    m = _with_place(m)
+    e = m.get("explanation") if isinstance(m, Mapping) else None
+    if not isinstance(e, Mapping):
+        return m
+    why = {k: v for k, v in e.items() if k not in ("placePath", "distanceM")}
+    if "placePath" in e:
+        try:
+            why["placePath"] = check_place_path(e["placePath"], "placePath")
+        except PlaceError:
+            pass
+    d = e.get("distanceM")
+    if isinstance(d, (int, float)) and not isinstance(d, bool) and math.isfinite(d) and d >= 0:
+        why["distanceM"] = d
+    return {**m, "explanation": why}
+
+
+def _yours(m: Mapping[str, Any]) -> bool:
+    """A memory of the caller's own: their Planet, or their agents' Stars, Orbits and Flybys. A
+    Constellation or a Galaxy (level ``hive``) is shared, and so is a memory whose address cannot
+    be read (core's ``addressOf``: the ``address``, else the Planet its ``scope`` names)."""
+    if "address" in m:
+        a = m["address"]
+        if not isinstance(a, Mapping):
+            return False
+        level = a.get("level")
+    else:
+        if not isinstance(m.get("scope"), Mapping):
+            return False
+        level = "user"
+    o = m.get("origin")
+    return level != "hive" and not (isinstance(o, Mapping) and o.get("level") == "hive")
+
+
+def _spatial_from_cloud(r: Mapping[str, Any], memories: List[Any], f: Mapping[str, Any]) -> List[Any]:
+    """A spatial recall's memories, closed on this side too: refused unless Oort Cloud says it
+    applied a filter (a ``spatial`` echo core's rules accept), then cut to the caller's own
+    memories that match ``f`` by core's rules, with the place path and distance measured here,
+    never as sent."""
+    echo = None
+    if "spatial" in r:
+        try:
+            echo = check_spatial_filter(r["spatial"])
+        except PlaceError:
+            echo = None
+    if echo is None:
+        raise OortUsageError(SPATIAL_NOT_APPLIED)
+    near = f.get("near")
+    kept = []
+    for m in memories:
+        if not isinstance(m, Mapping):
+            continue
+        place = m.get("place")
+        if not (_yours(m) and matches_spatial(place, f)):
+            continue
+        e = m.get("explanation") if isinstance(m.get("explanation"), Mapping) else {}
+        why = {k: v for k, v in e.items() if k not in ("placePath", "distanceM")}
+        if place is not None and place.get("nodeId") is not None:
+            why["placePath"] = place["nodeId"]
+        d = None if near is None else place_distance(place, near)
+        if d is not None:
+            why["distanceM"] = d
+        kept.append({**m, "explanation": why})
+    return kept
 
 
 def _activation(m: Mapping[str, Any], now_ms: float, d: float = 0.5, ws: float = 1.0) -> float:
@@ -206,7 +309,9 @@ class CloudClient:
         payload = None
         if body is not None:
             headers["Content-Type"] = "application/json"
-            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            # As JSON.stringify sends it: a surrogate pair as its character, a lone surrogate as
+            # an escape, so the body is always valid UTF-8.
+            payload = js_json_text(json.dumps(body, ensure_ascii=False)).encode("utf-8")
         try:
             r = self._http.request(method, route, headers, payload)
         except Unreachable as e:
@@ -315,7 +420,17 @@ class CloudOps:
                 reason="star-in-cloud",
             )
 
-    def recall(self, p: "CloudPrincipal", query: str, o: Mapping[str, Any], view: Mapping[str, str]) -> Dict[str, Any]:
+    def recall(
+        self,
+        p: "CloudPrincipal",
+        query: str,
+        o: Mapping[str, Any],
+        view: Mapping[str, str],
+        spatial: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """``spatial``: the filter (``within``, ``near``) as core's rules read it. Oort Cloud reads
+        only the caller's own memories for it, never a Constellation, and the answer is checked
+        here too."""
         speed = o.get("speed") or "full"
         include = o.get("include")
         if self.user is not None and include is not None and any(lvl not in ("planet", "self") for lvl in include):
@@ -335,9 +450,14 @@ class CloudOps:
             body["rerank"] = False
         if speed == "lexical":
             body["embed"] = False
+        if spatial:
+            body.update(spatial)
         r = self._call("POST", "/v1/recall", body)
         if not isinstance(r, Mapping) or not isinstance(r.get("memories"), list):
             raise OortInternalError("An internal error stopped this call (TypeError).")
+        memories = [_places_checked(m) for m in r["memories"]]
+        if spatial:
+            memories = _spatial_from_cloud(r, memories, spatial)
         now = self.now_ms()
         degraded = [
             d
@@ -356,7 +476,7 @@ class CloudOps:
                 }
             )
         return {
-            "memories": [_recalled(m, now) for m in r["memories"]],
+            "memories": [_recalled(m, now) for m in memories],
             "abstained": r.get("abstained") is True,
             "temporal": temporal if isinstance(temporal, Mapping) else {"mode": view.get("mode") or "current", "inferred": False},
             "read": list(r.get("read") or []),
@@ -393,29 +513,34 @@ class CloudOps:
             obs["session"] = t["sessionId"]
         if t.get("tools"):
             obs["tools"] = [_truncate_utf8(x, 512) for x in t["tools"][:16]]
+        if t.get("place") is not None:
+            # Checked by core's rules already (check_turn), as local mode checks it.
+            obs["place"] = t["place"]
         body: Dict[str, Any] = {**self._project(p)}
         if t.get("turnRef") is not None:
             body["turnRef"] = t["turnRef"]
         body["observation"] = obs
         return self._observe_view(self._call("POST", "/v1/observe", body), p)
 
-    def remember(self, p: "CloudPrincipal", facts: List[str], type_: Optional[str]) -> Dict[str, Any]:
+    def remember(
+        self, p: "CloudPrincipal", facts: List[str], type_: Optional[str], place: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """One observe per fact. With a ``place`` (checked by core's rules), every fact carries it
+        and has the TypeScript SDK's ``turnRef``, so a retry after a lost answer is a duplicate
+        while the same fact at another place is saved again."""
         self._refuse_star(p)
         hint = "" if type_ is None else f" (a {type_} fact)"
         results = []
-        for i, fact in enumerate(facts):
-            r = self._call(
-                "POST",
-                "/v1/observe",
-                {
-                    **self._project(p),
-                    "observation": {
-                        "user": f"Remember this{hint}: {fact}",
-                        "assistant": f"Noted: {fact}",
-                        "at": iso_now(self.now_ms()),
-                    },
-                },
-            )
+        for i, raw in enumerate(facts):
+            fact = js_text(raw)  # the fact as the TypeScript SDK holds it, for the body and the ref
+            at = iso_now(self.now_ms())
+            obs: Dict[str, Any] = {"user": f"Remember this{hint}: {fact}", "assistant": f"Noted: {fact}", "at": at}
+            body: Dict[str, Any] = {**self._project(p)}
+            if place is not None:
+                body["turnRef"] = remember_turn_ref(scrubbed_fact(fact), type_, p.project, at, place)
+                obs["place"] = dict(place)
+            body["observation"] = obs
+            r = self._call("POST", "/v1/observe", body)
             v = self._observe_view(r, p)
             first = (r.get("memories") or [{}])[0] if isinstance(r, Mapping) else {}
             item: Dict[str, Any] = {"fact": i, "outcome": v["outcome"]}
@@ -679,10 +804,18 @@ def iso_now(now_ms: float) -> str:
 
 
 def _truncate_utf8(s: str, n: int) -> str:
-    b = s.encode("utf-8")
+    """At most ``n`` UTF-8 bytes of ``s``, cut at a character boundary. A lone surrogate counts as
+    the three bytes it is sent as."""
+    s = js_text(s)
+    b = s.encode("utf-8", "surrogatepass")
     if len(b) <= n:
         return s
-    return b[:n].decode("utf-8", "ignore")
+    while n > 0:
+        try:
+            return b[:n].decode("utf-8", "surrogatepass")
+        except UnicodeDecodeError:
+            n -= 1
+    return ""
 
 
 class CloudPrincipal:

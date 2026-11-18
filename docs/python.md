@@ -176,9 +176,28 @@ A place is an `oortmem.types.Place` (`node_id`, `map_id`, `map_version`, `frame`
 (`map_id`, `pose`, `radius`, `frame`) or a mapping. The rules are the TypeScript SDK's
 ([Spatial memory](sdk.md#spatial-memory)): `within` matches whole path segments, `near` measures
 to the memory's region on the same map and frame only, and recalled memories carry `place`,
-`why.place_path` and `why.distance_m`. Oort Cloud holds places too (0.11.0 or newer), and the
-TypeScript SDK, the CLI and the MCP server send them there, but this client's cloud mode does not
-yet: in cloud mode each is an `OortRefusedError` (`local-only`) before any request.
+`why.place_path` and `why.distance_m`.
+
+From the next release, cloud mode sends places, `within` and `near` to Oort Cloud as well (in
+0.11.0 and earlier it refuses them with `OortRefusedError`, `local-only`). The rules are the same
+in both modes:
+
+- A place or a filter is checked with core's rules before any request. One they refuse is an
+  `OortUsageError` (`invalid-argument`) that names the field, never its value.
+- Letters, marks and digits in a place path are read from the running Python's Unicode data. A
+  place with a character newer than that data is refused before any request, and left out of what
+  Oort Cloud returns. Newer Python versions accept more.
+- A spatial recall in Oort Cloud reads only your own memories (your Planet and your agents'
+  Stars), never a Constellation or a Galaxy.
+- A `near` whose region holds more than 2,000 placed memories is refused. The `OortUsageError`
+  carries Oort Cloud's message unchanged after a fixed prefix, so use a smaller radius or add a
+  `within`.
+- The answer is checked on this side too. A spatial recall that Oort Cloud did not filter is an
+  `OortUsageError`. Otherwise only your memories that match the filter are returned, with the
+  place path and distance measured by the client. A place Oort Cloud sends back that core's
+  rules refuse is left out.
+- A `remember` with a place carries the same retry key (`turnRef`) as the TypeScript SDK's: a
+  retry on the same day is a duplicate, and the same fact at another place is saved again.
 
 A recalled memory that a link brought in (local mode) has `why.via`, a `RecallVia` with `kind`,
 `from_` (the id of the returned memory it was reached from; `from` on the wire) and `weight`.
@@ -191,10 +210,9 @@ linked memory out when the memory it was reached from is not in the block.
 from oortmem import Oort
 from oortmem.types import NearQuery, Place, Pose
 
-# A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
-# the local engine (0.9.0 or newer). Oort Cloud holds them too, but this client's cloud mode does
-# not send them yet: use the TypeScript SDK, the CLI or the MCP server for places in Oort Cloud.
-with Oort(mode="local") as oort:
+# A robot's memory of a site: each fact is remembered with where it was seen. The same code runs
+# on the local engine (0.9.0 or newer) and, from the next release, on Oort Cloud.
+with Oort() as oort:
     seen = [
         ("The red toolbox is on shelf A1.", Place(node_id="site:hq/room:A/shelf:A1", map_id="hq", pose=Pose(x=1, y=1))),
         ("The blue toolbox is on shelf B3.", Place(node_id="site:hq/room:B/shelf:B3", map_id="hq", pose=Pose(x=11, y=1))),
