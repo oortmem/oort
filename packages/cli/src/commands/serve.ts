@@ -424,22 +424,39 @@ export async function serveCommand(
     }
     const pid = shown(before.result['pid']);
     await callDaemon(socket, 'stop', {}, { budgetMs: 1000 });
+    const stopped = (): number => {
+      io.out(`${ui.ok(`Stopped oort serve (pid ${pid}).`)}\n`);
+      if (jsonMode(ctx)) {
+        emit(ctx, {
+          stopped: true,
+          wasRunning: true,
+          pid: before.result['pid'],
+          removedLeftovers: false,
+        });
+      }
+      return 0;
+    };
+    // The socket goes first, as the daemon stops listening; its pid file and its `stopped (...)`
+    // log line follow once it has closed the store. Wait for the process to exit too, so that a
+    // start, a hook or `oort doctor` right after this sees it gone, not still holding the lock.
+    const exited = (): boolean => {
+      const p = before.result['pid'];
+      if (typeof p !== 'number' || !Number.isSafeInteger(p) || p <= 0) return true;
+      try {
+        process.kill(p, 0);
+        return false;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === 'ESRCH';
+      }
+    };
     const until = Date.now() + WAIT_MS;
     while (Date.now() < until) {
-      if (socketTrust(socket) === 'absent') {
-        io.out(`${ui.ok(`Stopped oort serve (pid ${pid}).`)}\n`);
-        if (jsonMode(ctx)) {
-          emit(ctx, {
-            stopped: true,
-            wasRunning: true,
-            pid: before.result['pid'],
-            removedLeftovers: false,
-          });
-        }
-        return 0;
-      }
+      if (socketTrust(socket) === 'absent' && exited()) return stopped();
       await sleep(50);
     }
+    // It no longer listens but has not exited yet (or its parent has not reaped it): it serves
+    // nothing, so it is stopped.
+    if (socketTrust(socket) === 'absent') return stopped();
     throw new Refusal(`the daemon (pid ${pid}) did not stop within ${WAIT_MS / 1000}s.`, {
       code: 'internal',
     });

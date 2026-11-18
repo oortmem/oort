@@ -15,6 +15,7 @@ import {
   SKIP_FILE,
   callDaemon,
   hookViaDaemon,
+  readAutostartState,
   readSkip,
   writeAutostartState,
 } from './serve-client.js';
@@ -32,8 +33,9 @@ import {
 const BIN = path.join(import.meta.dirname, '..', 'dist', 'main.js');
 
 // Each test starts several processes; on a loaded machine (a load average of 100+) one start can
-// take seconds. The timeouts here only catch a hang, so they are generous.
-vi.setConfig({ testTimeout: 120_000 });
+// take seconds. The timeouts here only catch a hang, so they are generous; that includes the
+// `afterEach` below, which runs `oort serve stop` (a process start of its own) per sandbox.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 interface Sandbox {
   root: string;
@@ -460,6 +462,20 @@ function serveLog(s: Sandbox): string {
   }
 }
 
+const stopLines = (s: Sandbox): number => serveLog(s).match(/ stopped \(/g)?.length ?? 0;
+
+/**
+ * `oort serve stop`, then waits until the daemon `pid` has exited and logged its own
+ * `stopped (...)` line: after that, nothing it does can change what a later step reads (its pid
+ * file, its log).
+ */
+async function stopAndWait(s: Sandbox, pid: number): Promise<void> {
+  const before = stopLines(s);
+  const r = await oort(s, ['serve', 'stop']);
+  expect(r.exitCode, r.stderr).toBe(0);
+  await until(() => !alive(pid) && stopLines(s) > before);
+}
+
 /** The serve rows of `oort doctor --json`, by name. */
 async function doctorServe(
   s: Sandbox,
@@ -533,7 +549,7 @@ describe('serve.autostart: on by default', () => {
     expect(running['autostart']?.detail).toMatch(/^on/);
 
     // A session start (the usual first hook of a session) starts it too.
-    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
+    await stopAndWait(s, pid);
     const stopped = await doctorServe(s, env);
     expect(stopped['daemon']?.status).toBe('info');
     expect(stopped['daemon']?.detail).toContain('the next prompt or session starts it');
@@ -595,8 +611,9 @@ describe('serve.autostart: on by default', () => {
     expect(ok.exitCode).toBe(0);
     expect(ok.stdout).toBe(baseline);
     expect(fs.readFileSync(log, 'utf8')).toBe('stdout\nspawn serve\n');
-    await daemonPid(s);
-    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
+    // Gone, pid file and all: a daemon still closing holds its lock, and the hook below would
+    // take it for one that is starting and start none.
+    await stopAndWait(s, await daemonPid(s));
 
     // A start that throws: the same answer, exit 0, and the breaker opens for a minute.
     fs.rmSync(log);
@@ -693,10 +710,9 @@ describe('serve.autostart: on by default', () => {
     >;
     expect(status['idleExitMs']).toBe(7 * 60_000);
     // (`serve.exits-when-idle` waits one out; here the log line doctor reads after one.)
-    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
-    // The daemon logs its own `stopped (...)` line as it exits; wait for it, so the line below
-    // is the last one doctor reads.
-    await until(() => !alive(pid) && serveLog(s).includes('stopped ('));
+    // The daemon logs its own `stopped (...)` line as it exits; the line below comes after it, so
+    // it is the last one doctor reads.
+    await stopAndWait(s, pid);
     fs.appendFileSync(
       path.join(s.oortHome, 'logs', 'serve.log'),
       `${new Date().toISOString()} stopped (idle)\n`,
@@ -1058,17 +1074,24 @@ describe('oort serve hardening', () => {
     const session = JSON.stringify({ session_id: 's-mig', cwd: s.cwd, source: 'startup' });
     const env = autoEnv(s);
     expect((await oort(s, ['hook', 'SessionStart'], { input: session, env })).exitCode).toBe(0);
-    // The spawned daemon refuses (migration pending) and opens the breaker.
+    // The spawned daemon refuses (migration pending) and opens the breaker. It writes the breaker
+    // before its refusal reaches the log, then exits: wait for all three.
     await until(() => readSkip(s.oortHome)?.reason === 'migration');
-    const logBefore = fs.readFileSync(path.join(s.oortHome, 'logs', 'serve.log'), 'utf8');
-    expect(logBefore).toContain('never migrates');
-    // The next session, and the next prompt, do not spawn another one.
+    await until(() => serveLog(s).includes('never migrates'));
+    const refused = Number(/ pid (\d+) /.exec(serveLog(s))?.[1]);
+    expect(refused).toBeGreaterThan(0);
+    await until(() => !alive(refused));
+    const logBefore = serveLog(s);
+    const spawnedAt = readAutostartState(s.oortHome).spawnedAt;
+    expect(spawnedAt).toBeDefined();
+    // The next session, and the next prompt, do not spawn another one. A hook records a start
+    // (`spawnDaemon`) before it exits, so once both have exited there is nothing to wait for.
     expect((await oort(s, ['hook', 'SessionStart'], { input: session, env })).exitCode).toBe(0);
     expect(
       (await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env })).exitCode,
     ).toBe(0);
-    await sleep(1500);
-    expect(fs.readFileSync(path.join(s.oortHome, 'logs', 'serve.log'), 'utf8')).toBe(logBefore);
+    expect(readAutostartState(s.oortHome).spawnedAt).toBe(spawnedAt);
+    expect(serveLog(s)).toBe(logBefore);
   });
 
   it('serve.an-invalid-home-config-opens-the-breaker-so-autostart-does-not-retry-every-prompt', async () => {
