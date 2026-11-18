@@ -2399,14 +2399,15 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
      * one (with a writer that answers `rewritten`) and must leave no date that only the forgotten
      * text stated, in the memory or in `occurredIn`. `how.refinedFrom` writes the later one with
      * that text first and refines it to `restating`; `how.newer` writes a newer memory that
-     * supersedes it, or with `how.corrects` corrects it, as `observe` writes each.
+     * supersedes it, or with `how.corrects` corrects it, and `how.newest` one that supersedes
+     * the newer one, as `observe` writes each.
      */
     const forgetRestated = async (
       restating: string,
       rewritten: string,
       first = 'The deploy of build 2.4 was on 2026-10-01.',
       entities = ['deploy'],
-      how: { newer?: string; corrects?: boolean; refinedFrom?: string } = {},
+      how: { newer?: string; corrects?: boolean; newest?: string; refinedFrom?: string } = {},
     ) => {
       const turn = new Date('2026-11-02T10:00:00.000Z');
       const wrote = (answer: string): Decision => ({
@@ -2498,6 +2499,18 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
         };
         writes.splice(1, 1, later, n);
       }
+      if (how.newest !== undefined) {
+        const i = writes.findIndex((w) => w.id === 'newer');
+        const n = writes[i]!;
+        const e = remembered('newest', how.newest, { supersedes: 'newer' });
+        writes.splice(i, 1, {
+          ...n,
+          validTo: Date.parse(e.validFrom) > Date.parse(n.validFrom) ? e.validFrom : n.validFrom,
+          endReason: 'superseded',
+          supersededBy: 'newest',
+        });
+        writes.push(e);
+      }
       await store.upsertMany(TG, writes);
       const write: MemoryWriter = {
         write: () => Promise.reject(new Error('not used')),
@@ -2515,6 +2528,7 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
         before: later,
         later: (await store.get(TG, 'later'))!,
         newer: await store.get(TG, 'newer'),
+        newest: await store.get(TG, 'newest'),
       };
     };
 
@@ -2622,6 +2636,52 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       expect(newer?.validTo).toBeNull();
       expect(newer?.text).toBe('Correction: it blocks hotfixes and merges.');
       expect(isCurrent(newer!, new Date('2026-12-03T00:00:00.000Z'))).toBe(true);
+    });
+
+    it('occurrences.forget-rewrite-leaves-a-correction-a-supersede-ended', async () => {
+      const { later, newer, newest } = await forgetRestated(
+        'The freeze, still until 2026-11-30, now blocks hotfixes.',
+        'The freeze now blocks hotfixes.',
+        'The freeze runs until 2026-11-30.',
+        ['freeze'],
+        {
+          newer: 'Correction: it blocks hotfixes and merges.',
+          corrects: true,
+          newest: 'Starting 2026-12-01 the freeze is lifted.',
+        },
+      );
+      expect(later.validTo).toBeNull();
+      // The correction copied the end, and the newest fact starts there: it keeps it.
+      expect(newer?.validTo).toBe('2026-12-01T00:00:00.000Z');
+      const after = new Date('2026-12-02T00:00:00.000Z');
+      expect(isCurrent(newer!, after)).toBe(false);
+      expect(isCurrent(newest!, after)).toBe(true);
+    });
+
+    it('occurrences.forget-rewrite-gives-its-new-start-to-a-correction-that-copied-it', async () => {
+      const { turn, later, newer } = await forgetRestated(
+        'The release moved from 2026-10-01 to 2026-10-08.',
+        'The release is 2026-10-08.',
+        'The release is on 2026-10-01.',
+        ['release'],
+        { newer: 'Correction: it is the beta release.', corrects: true },
+      );
+      expect([later.validFrom, later.validTo]).toEqual([turn.toISOString(), null]);
+      expect([newer?.validFrom, newer?.validTo]).toEqual([turn.toISOString(), null]);
+      expect(isCurrent(newer!, new Date('2026-10-02T12:00:00.000Z'))).toBe(false);
+    });
+
+    it('occurrences.forget-rewrite-gives-a-start-alone-to-a-correction-that-copied-it', async () => {
+      const { turn, before, later, newer } = await forgetRestated(
+        'The release is live since 2026-10-01.',
+        'The release is live.',
+        'The release went live on 2026-10-01.',
+        ['release'],
+        { newer: 'Correction: the release is the beta.', corrects: true },
+      );
+      expect([before.validFrom, before.validTo]).toEqual(['2026-10-01T00:00:00.000Z', null]);
+      expect(later.validFrom).toBe(turn.toISOString());
+      expect([newer?.validFrom, newer?.validTo]).toEqual([turn.toISOString(), null]);
     });
 
     it('occurrences.forget-rewrite-reads-an-end-a-refine-carried-over', async () => {

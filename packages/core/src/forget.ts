@@ -442,6 +442,13 @@ export function rewrittenOccurred(
 }
 
 /**
+ * Whether a supersede ended `m`, so its end may be where the newer fact starts. A correction
+ * leaves its prior's validity as the prior's own: only a supersede sets an end.
+ */
+const isSuperseded = (m: Memory): boolean =>
+  m.endReason === 'superseded' || (m.supersededBy !== null && m.endReason !== 'corrected');
+
+/**
  * A rewritten memory's validity: each bound its old text set is read again from the new text
  * against the same turn. A bound counts as set by the text when it equals what `factInterval`
  * reads from the old text again, or what the last write that recorded one recorded
@@ -451,23 +458,26 @@ export function rewrittenOccurred(
  * none for `validTo`. The end of a superseded memory is never changed: it may be where the next
  * fact starts. Any other bound is kept, and a start is then moved back before the end as the
  * write path moves it, so the end never comes first. `bounds` is what the new text sets, and
- * `endRead` whether the end was read again.
+ * `startRead` and `endRead` whether the start and the end were read again.
  */
 export function rewrittenValidity(
   m: Memory,
   text: string,
   turn: RewriteTurn = rewriteTurnOf(m),
-): { validFrom: string; validTo: string | null; bounds: FactInterval; endRead: boolean } {
+): {
+  validFrom: string;
+  validTo: string | null;
+  bounds: FactInterval;
+  startRead: boolean;
+  endRead: boolean;
+} {
   const recorded = carriedInterval(m);
   const old = intervalOf(m.text, turn);
   const fromText = (v: string | null, said: string | undefined, read: string | undefined) =>
     v !== null && (v === said || v === read);
   const bounds = intervalOf(text, turn);
   const endFromText = fromText(m.validTo, recorded.validTo, old.validTo);
-  // A correction leaves its prior's validity as the prior's own: only a supersede sets an end.
-  const superseded =
-    m.endReason === 'superseded' || (m.supersededBy !== null && m.endReason !== 'corrected');
-  const endRead = endFromText && !superseded;
+  const endRead = endFromText && !isSuperseded(m);
   const validTo = endRead ? (bounds.validTo ?? null) : m.validTo;
   const startFromText =
     fromText(m.validFrom, recorded.validFrom, old.validFrom) ||
@@ -475,7 +485,13 @@ export function rewrittenValidity(
       m.validFrom ===
         startBefore(recorded.validFrom ?? old.validFrom ?? turn.at.toISOString(), m.validTo));
   const start = startFromText ? (bounds.validFrom ?? turn.at.toISOString()) : m.validFrom;
-  return { validFrom: startBefore(start, validTo), validTo, bounds, endRead };
+  return {
+    validFrom: startBefore(start, validTo),
+    validTo,
+    bounds,
+    startRead: startFromText,
+    endRead,
+  };
 }
 
 /** Runs `fn` over `items`, at most `limit` at once, results in order. */
@@ -508,7 +524,8 @@ async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>)
  *    described its old text, and its event time is read again from the new text
  *    (`rewrittenOccurred`): a date only the old text stated is gone, the day it was said stays.
  *    So are the validity bounds its old text set (`rewrittenValidity`). A memory that corrected
- *    it and copied the old end, setting none of its own, gets the new end (its validity only).
+ *    it and copied the old start or end, setting none of its own, gets the new one (its validity
+ *    only), unless a supersede has ended it since.
  *    One the writer leaves as it was is reported as `unchanged`.
  * 3. The chain is re-linked over the gap, and the rewrites and links land in one guarded write
  *    (`upsertManyIfUnchanged` where the store has it): a memory changed meanwhile is reported
@@ -639,12 +656,16 @@ export async function forgetMemory(
           probability: 1,
         });
       }
-      // A new end replaces the old one in the memories that corrected it and copied it.
+      // A new start or end replaces the old one in the memories that corrected it and copied it.
       const ends =
         validity.endRead && validity.validTo !== full.validTo
           ? { from: full.validTo, to: validity.validTo }
           : undefined;
-      return { m, next, ends };
+      const starts =
+        validity.startRead && validity.validFrom !== full.validFrom
+          ? { from: full.validFrom, to: validity.validFrom }
+          : undefined;
+      return { m, next, starts, ends };
     } catch {
       return { m, reason: 'failed' as const };
     }
@@ -656,14 +677,16 @@ export async function forgetMemory(
     else if ('reason' in r) outcome.notRewritten.push({ id: r.m.id, reason: r.reason });
   }
 
-  // A correction copies its prior's end when its own text sets none (`observe`'s CORRECT), so a
-  // rewrite that reads a new end for the prior gives it to each correction down the chain that
-  // still holds the old one: its validity only, no new text and no new vector, in the same
-  // guarded write.
+  // A correction copies its prior's start and end when its own text sets none (`observe`'s
+  // CORRECT), so a rewrite that reads a new one for the prior gives it to each correction down
+  // the chain that still holds the old one: its validity only, no new text and no new vector, in
+  // the same guarded write. A correction a supersede has ended since is left as it is (its end
+  // may be where the newer fact starts), and the walk stops there.
   const corrections = new Set<string>();
+  const listed = (cid: string) => outcome.notRewritten.some((x) => x.id === cid);
   for (const r of results) {
-    if (!('ends' in r) || r.ends === undefined) continue;
-    const { from, to } = r.ends;
+    if (!('next' in r) || (r.starts === undefined && r.ends === undefined)) continue;
+    const { starts, ends } = r;
     let prior: Memory = r.m;
     const walkedCorrections = new Set<string>([prior.id]);
     while (prior.endReason === 'corrected' && prior.supersededBy !== null) {
@@ -671,16 +694,24 @@ export async function forgetMemory(
       if (walkedCorrections.has(cid) || cid === id) break;
       walkedCorrections.add(cid);
       const c = chain.get(cid) ?? (await store.get(grant, cid));
-      if (c === null || isJudgment(c) || c.validTo !== from) break;
-      if (recordedInterval(c)?.validTo !== undefined) break;
+      if (c === null || isJudgment(c) || isSuperseded(c)) break;
+      const own = carriedInterval(c);
+      const takesEnd = ends !== undefined && own.validTo === undefined && c.validTo === ends.from;
+      const takesStart =
+        starts !== undefined &&
+        own.validFrom === undefined &&
+        (c.validFrom === starts.from || c.validFrom === startBefore(starts.from, c.validTo));
+      if (!takesStart && !takesEnd) break;
       if (!grantWrites(grant, c)) {
-        outcome.notRewritten.push({ id: c.id, reason: 'not-writable' });
+        if (!listed(c.id)) outcome.notRewritten.push({ id: c.id, reason: 'not-writable' });
         break;
       }
       const base = changed.get(c.id)?.next ?? c;
+      const validTo = takesEnd ? (ends?.to ?? null) : base.validTo;
+      const validFrom = startBefore(takesStart ? starts!.to : base.validFrom, validTo);
       changed.set(c.id, {
         was: changed.get(c.id)?.was ?? c,
-        next: { ...base, validTo: to, validFrom: startBefore(base.validFrom, to), updatedAt: iso },
+        next: { ...base, validFrom, validTo, updatedAt: iso },
       });
       corrections.add(c.id);
       prior = c;
