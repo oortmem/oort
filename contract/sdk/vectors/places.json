@@ -1,4 +1,54 @@
 {
+  "numbers": [
+    {
+      "input": "5.0",
+      "json": "5"
+    },
+    {
+      "input": "7.22e17",
+      "json": "722000000000000000"
+    },
+    {
+      "input": "-7.222578159513844e17",
+      "json": "-722257815951384400"
+    },
+    {
+      "input": "1e21",
+      "json": "1e+21"
+    },
+    {
+      "input": "-0.0",
+      "json": "0"
+    },
+    {
+      "input": "1e-7",
+      "json": "1e-7"
+    },
+    {
+      "input": "1.5e-6",
+      "json": "0.0000015"
+    },
+    {
+      "input": "1e-6",
+      "json": "0.000001"
+    },
+    {
+      "input": "123456.789",
+      "json": "123456.789"
+    },
+    {
+      "input": "9007199254740993.0",
+      "json": "9007199254740992"
+    },
+    {
+      "input": "0.1",
+      "json": "0.1"
+    },
+    {
+      "input": "-1e7",
+      "json": "-10000000"
+    }
+  ],
   "paths": [
     {
       "input": "site:hq/room:B/shelf:B3",
@@ -1000,6 +1050,57 @@
       "at": "2026-11-05T23:59:59.000Z",
       "turnRef": "remember:b686a482e41e5189817bf89029f443ab39fe4766d11d7c0e7fbf23cddd8a936a:2026-11-05",
       "request": "remember:f883cfc46e078683cef4480e9a83b7137a0019a0d166429379f7e86962975f10:2026-11-05"
+    },
+    {
+      "fact": "A lone \ud83d here.",
+      "type": null,
+      "project": null,
+      "place": null,
+      "at": "2026-11-05T23:59:59.000Z",
+      "turnRef": "remember:494f1c6a01c19f61eadaf2f2ab248f6acdee95f6d9744e288b9e9fdb832041ef:2026-11-05",
+      "request": "remember:494f1c6a01c19f61eadaf2f2ab248f6acdee95f6d9744e288b9e9fdb832041ef:2026-11-05"
+    },
+    {
+      "fact": "A lone \ud83d here.",
+      "type": null,
+      "project": null,
+      "place": {
+        "nodeId": "a"
+      },
+      "at": "2026-11-05T23:59:59.000Z",
+      "turnRef": "remember:661a93e3aee4df7320bc53f1e1986b5f332f701c304916887c8506d6cef2c556:2026-11-05",
+      "request": "remember:661a93e3aee4df7320bc53f1e1986b5f332f701c304916887c8506d6cef2c556:2026-11-05"
+    },
+    {
+      "fact": "A pair \ud83d\ude00 here.",
+      "type": null,
+      "project": null,
+      "place": null,
+      "at": "2026-11-05T23:59:59.000Z",
+      "turnRef": "remember:b3d04e966dff1a7938a654f54bc565e3aeeeeecda46bfa8962d02a2f9855a0d2:2026-11-05",
+      "request": "remember:b3d04e966dff1a7938a654f54bc565e3aeeeeecda46bfa8962d02a2f9855a0d2:2026-11-05"
+    },
+    {
+      "fact": "A pair \ud83d\ude00 here.",
+      "type": null,
+      "project": null,
+      "place": {
+        "nodeId": "a"
+      },
+      "at": "2026-11-05T23:59:59.000Z",
+      "turnRef": "remember:94e452fc4c3ed8222641702f87d9acafafa02032ee19522031cf0fa5884165df:2026-11-05",
+      "request": "remember:94e452fc4c3ed8222641702f87d9acafafa02032ee19522031cf0fa5884165df:2026-11-05"
+    },
+    {
+      "fact": "An astral letter in the path.",
+      "type": null,
+      "project": null,
+      "place": {
+        "nodeId": "site:\ud835\udc00"
+      },
+      "at": "2026-11-05T23:59:59.000Z",
+      "turnRef": "remember:0248c2e1eef4a579418b323d40f3261929ec3b400d2c9901c5f6a9041b2626e1:2026-11-05",
+      "request": "remember:0248c2e1eef4a579418b323d40f3261929ec3b400d2c9901c5f6a9041b2626e1:2026-11-05"
     }
   ]
 }

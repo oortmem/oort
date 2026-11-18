@@ -760,6 +760,9 @@ describe('golden vectors (contract/sdk/vectors)', () => {
       { place: undefined, filter: { within: 'room:B' } },
     ];
     const pw = 'Tr0ub4dor' + '-and-3';
+    const lone = String.fromCharCode(0xd83d);
+    const pair = String.fromCharCode(0xd83d, 0xde00);
+    const bold = String.fromCharCode(0xd835, 0xdc00);
     const refs: {
       fact: string;
       type: MemoryType | null;
@@ -823,9 +826,36 @@ describe('golden vectors (contract/sdk/vectors)', () => {
         project: null,
         place: { nodeId: 'srv:db' },
       },
+      // Surrogates, as JavaScript holds them: a lone one, and a pair (one astral character).
+      { fact: `A lone ${lone} here.`, type: null, project: null, place: null },
+      { fact: `A lone ${lone} here.`, type: null, project: null, place: { nodeId: 'a' } },
+      { fact: `A pair ${pair} here.`, type: null, project: null, place: null },
+      { fact: `A pair ${pair} here.`, type: null, project: null, place: { nodeId: 'a' } },
+      {
+        fact: 'An astral letter in the path.',
+        type: null,
+        project: null,
+        place: { nodeId: `site:${bold}` },
+      },
     ];
     const at = '2026-11-05T23:59:59.000Z';
+    // Numbers as text, so a float stays a float in Python (JSON writes 5.0 as 5).
+    const numbers = [
+      '5.0',
+      '7.22e17',
+      '-7.222578159513844e17',
+      '1e21',
+      '-0.0',
+      '1e-7',
+      '1.5e-6',
+      '1e-6',
+      '123456.789',
+      '9007199254740993.0',
+      '0.1',
+      '-1e7',
+    ];
     vector('places.json', {
+      numbers: numbers.map((input) => ({ input, json: JSON.stringify(Number(input)) })),
       paths: paths.map((input) => ({ input, ...outcome(() => checkPlacePath(input, 'within')) })),
       places: places.map((input) => ({ input, ...outcome(() => checkPlace(input)) })),
       nears: nears.map((input) => ({ input, ...outcome(() => checkNear(input)) })),

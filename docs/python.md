@@ -184,6 +184,9 @@ in both modes:
 
 - A place or a filter is checked with core's rules before any request. One they refuse is an
   `OortUsageError` (`invalid-argument`) that names the field, never its value.
+- Letters, marks and digits in a place path are read from the running Python's Unicode data. A
+  place with a character newer than that data is refused before any request, and left out of what
+  Oort Cloud returns. Newer Python versions accept more.
 - A spatial recall in Oort Cloud reads only your own memories (your Planet and your agents'
   Stars), never a Constellation or a Galaxy.
 - A `near` whose region holds more than 2,000 placed memories is refused. The `OortUsageError`

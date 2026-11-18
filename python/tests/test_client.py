@@ -1053,6 +1053,43 @@ class CloudMode(unittest.TestCase):
                 self.assertNotIn("secret-value", repr(e.exception))
         self.assertEqual(self.rec.seen, [])
 
+    def test_a_place_nested_deeper_than_a_place_can_be_is_a_usage_error(self) -> None:
+        from oortmem import OortUsageError
+
+        cycle: Dict[str, Any] = {"nodeId": "a"}
+        cycle["pose"] = cycle
+        deep = {"nodeId": "a", "pose": {"x": {"y": {"z": {"w": 1}}}, "y": 0}}
+        with self.oort() as o:
+            for call, message in (
+                (lambda: o.remember("x", place=cycle), "remember options: invalid field place."),
+                (lambda: o.remember("x", place=deep), "remember options: invalid field place."),
+                (lambda: o.observe(user="a", assistant="b", place=cycle), "turn: invalid field place."),
+                (lambda: o.recall("q", near={"mapId": "hq", "pose": cycle, "radius": 1}), "recall options: invalid field near."),
+                (lambda: o.recall("q", near=[[[[[1]]]]]), "recall options: invalid field near."),
+            ):
+                with self.assertRaises(OortUsageError) as e:
+                    call()
+                self.assertEqual(str(e.exception), message)
+        self.assertEqual(self.rec.seen, [])
+
+    def test_surrogates_are_sent_as_javascript_sends_them(self) -> None:
+        added = {"outcome": "added", "memories": [{"action": "added", "id": "m1"}], "counts": {}}
+        self.rec.answers["POST /v1/observe"] = (200, added)
+        lone = "lone " + chr(0xD83D) + " here"
+        pair = "pair " + chr(0xD83D) + chr(0xDE00)
+        with self.oort() as o:
+            o.remember(lone)
+            o.remember(pair)
+            o.observe(user=pair, assistant=lone)
+            o.remember(pair, place={"nodeId": "a"})
+            o.remember("pair " + chr(0x1F600), place={"nodeId": "a"})
+        sent = [r["body"]["observation"] for r in self.rec.seen]
+        self.assertEqual(sent[0]["assistant"], "Noted: " + lone)  # escaped on the wire, valid UTF-8
+        self.assertEqual(sent[1]["assistant"], "Noted: pair " + chr(0x1F600))
+        self.assertEqual((sent[2]["user"], sent[2]["assistant"]), ("pair " + chr(0x1F600), lone))
+        # A pair held as two code points is the character it encodes: the same ref.
+        self.assertEqual(self.rec.seen[3]["body"]["turnRef"], self.rec.seen[4]["body"]["turnRef"])
+
     def test_a_spatial_recall_oort_cloud_did_not_apply_is_refused(self) -> None:
         from oortmem import OortUsageError
         from oortmem._cloud import SPATIAL_NOT_APPLIED

@@ -22,6 +22,8 @@ from ._place import (
     check_place_path,
     check_spatial_filter,
     checked_place,
+    js_json_text,
+    js_text,
     matches_spatial,
     place_distance,
     remember_turn_ref,
@@ -307,7 +309,9 @@ class CloudClient:
         payload = None
         if body is not None:
             headers["Content-Type"] = "application/json"
-            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            # As JSON.stringify sends it: a surrogate pair as its character, a lone surrogate as
+            # an escape, so the body is always valid UTF-8.
+            payload = js_json_text(json.dumps(body, ensure_ascii=False)).encode("utf-8")
         try:
             r = self._http.request(method, route, headers, payload)
         except Unreachable as e:
@@ -527,7 +531,8 @@ class CloudOps:
         self._refuse_star(p)
         hint = "" if type_ is None else f" (a {type_} fact)"
         results = []
-        for i, fact in enumerate(facts):
+        for i, raw in enumerate(facts):
+            fact = js_text(raw)  # the fact as the TypeScript SDK holds it, for the body and the ref
             at = iso_now(self.now_ms())
             obs: Dict[str, Any] = {"user": f"Remember this{hint}: {fact}", "assistant": f"Noted: {fact}", "at": at}
             body: Dict[str, Any] = {**self._project(p)}
@@ -799,10 +804,18 @@ def iso_now(now_ms: float) -> str:
 
 
 def _truncate_utf8(s: str, n: int) -> str:
-    b = s.encode("utf-8")
+    """At most ``n`` UTF-8 bytes of ``s``, cut at a character boundary. A lone surrogate counts as
+    the three bytes it is sent as."""
+    s = js_text(s)
+    b = s.encode("utf-8", "surrogatepass")
     if len(b) <= n:
         return s
-    return b[:n].decode("utf-8", "ignore")
+    while n > 0:
+        try:
+            return b[:n].decode("utf-8", "surrogatepass")
+        except UnicodeDecodeError:
+            n -= 1
+    return ""
 
 
 class CloudPrincipal:

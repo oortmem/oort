@@ -489,7 +489,7 @@ class Oort:
             "speed": speed,
             "inferTime": infer_time,
             "within": within,
-            "near": None if near is None else place_wire(near),
+            "near": None if near is None else place_wire(near, "recall options", "near"),
         }
         opts = {k: v for k, v in opts.items() if v is not None}
 

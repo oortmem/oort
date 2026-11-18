@@ -106,7 +106,8 @@ _ZWJ = "\u200d"
 _SEGMENT_SYMBOLS = "._:@-"
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}")
 _FIELD = re.compile(r"[^A-Za-z0-9_.-]")
-_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+_LONE_SURROGATE = re.compile("[" + chr(0xD800) + "-" + chr(0xDFFF) + "]")
+_SURROGATE_PAIR = re.compile("[" + chr(0xD800) + "-" + chr(0xDBFF) + "][" + chr(0xDC00) + "-" + chr(0xDFFF) + "]")
 
 _PLACE_KEYS = ("nodeId", "mapId", "mapVersion", "frame", "pose", "extent", "geo", "sigma")
 
@@ -215,7 +216,7 @@ def check_place_path(raw: Any, at: str = "place.nodeId") -> str:
     """A place path, checked and in Unicode NFC: 1 to 16 segments of 1 to 64 letters (with their
     combining marks), digits and ``. _ : @ -``, with no invisible characters but the joiners
     IDNA's ContextJ rules allow."""
-    v = unicodedata.normalize("NFC", raw) if isinstance(raw, str) else raw
+    v = unicodedata.normalize("NFC", js_text(raw)) if isinstance(raw, str) else raw
     if not isinstance(v, str) or _js_len(v) > MAX_PATH:
         raise _fail(at, f"must be a place path of at most {MAX_PATH} characters")
     segments = v.split("/")
@@ -404,8 +405,6 @@ def js_number(v: Any) -> str:
         return "null"
     if v == 0:
         return "0"
-    if v.is_integer() and abs(v) < 1e21:
-        return str(int(v))
     sign = "-" if v < 0 else ""
     # The shortest digits that read back as v (both languages pick them), placed as ECMAScript's
     # Number::toString places them: v is 0.digits times 10 to the n.
@@ -425,10 +424,21 @@ def js_number(v: Any) -> str:
     return sign + out
 
 
+def js_text(s: str) -> str:
+    """A string as JavaScript reads it: a surrogate pair held as two Python code points is the one
+    character it encodes. A lone surrogate stays as it is."""
+    return _SURROGATE_PAIR.sub(lambda m: chr(0x10000 + ((ord(m.group(0)[0]) - 0xD800) << 10) + ord(m.group(0)[1]) - 0xDC00), s)
+
+
+def js_json_text(out: str) -> str:
+    """JSON from ``json.dumps(..., ensure_ascii=False)`` as ``JSON.stringify`` writes it: surrogate
+    pairs joined (``js_text``) and a lone surrogate as a ``\\u`` escape, so the text is valid UTF-8."""
+    return _LONE_SURROGATE.sub(lambda m: f"\\u{ord(m.group(0)):04x}", js_text(out))
+
+
 def _js_string(s: str) -> str:
-    """A string as ``JSON.stringify`` writes it (a lone surrogate as a ``\\u`` escape)."""
-    out = json.dumps(s, ensure_ascii=False)
-    return _LONE_SURROGATE.sub(lambda m: f"\\u{ord(m.group(0)):04x}", out)
+    """A string as ``JSON.stringify`` writes it."""
+    return js_json_text(json.dumps(s, ensure_ascii=False))
 
 
 def _js_json(v: Any) -> str:
@@ -459,8 +469,8 @@ def place_identity(p: Mapping[str, Any]) -> str:
 
 
 def _utf8(s: str) -> bytes:
-    # As Node hashes a string: a lone surrogate as U+FFFD.
-    return _LONE_SURROGATE.sub("\ufffd", s).encode("utf-8")
+    # As Node hashes a string: a surrogate pair as its character, a lone surrogate as U+FFFD.
+    return _LONE_SURROGATE.sub(chr(0xFFFD), js_text(s)).encode("utf-8")
 
 
 def remember_turn_ref(

@@ -14,9 +14,9 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ._place import PlaceError, check_near, check_place, check_place_path, fields_of
+from ._place import PlaceError, check_near, check_place, check_place_path, fields_of, js_text
 from .errors import OortUsageError
-from .types import Turn, camel, to_wire
+from .types import Turn, camel
 
 LIMITS = {
     "query_bytes": 2048,
@@ -81,11 +81,14 @@ def bad(what: str, fields: Sequence[str], unknown: bool = False) -> OortUsageErr
 
 
 def js_len(s: str) -> int:
-    return len(s.encode("utf-16-le")) // 2
+    """``s.length`` in JavaScript: UTF-16 units (a surrogate held as a code point is one)."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def utf8(s: str) -> int:
-    return len(s.encode("utf-8", "surrogatepass"))
+    """UTF-8 bytes as JavaScript counts them: a surrogate pair as its character, a lone surrogate
+    as three bytes (U+FFFD)."""
+    return len(js_text(s).encode("utf-8", "surrogatepass"))
 
 
 def is_int(v: Any) -> bool:
@@ -137,18 +140,36 @@ def turn_wire(turn: Any) -> Dict[str, Any]:
         if not isinstance(k, str):
             raise bad("turn", ["turn"])
         key = camel(k) if "_" in k else k
-        out[key] = wire_date(v) if key == "at" else place_wire(v) if key == "place" else v
+        out[key] = wire_date(v) if key == "at" else place_wire(v, "turn", "place") if key == "place" else v
     return out
 
 
-def place_wire(v: Any) -> Any:
+#: How deep a place can nest (place, pose, a value) with one level to spare, so core's rules
+#: still name a field that holds an object.
+PLACE_DEPTH = 3
+
+
+def place_wire(v: Any, what: str = "remember options", key: str = "place", _depth: int = 0) -> Any:
     """A ``Place`` or ``NearQuery`` (or a mapping, snake_case or camelCase keys) as its wire
     object. The values are checked by core's rules: by ``oort serve`` in local mode, and here
-    (``_place.py``) before any request in cloud mode."""
+    (``_place.py``) before any request in cloud mode. Anything nested deeper than a place can be
+    (a cycle, say) is refused as ``key`` (``what: invalid field key.``)."""
+    if _depth > PLACE_DEPTH:
+        raise bad(what, [key])
     if dataclasses.is_dataclass(v) and not isinstance(v, type):
-        return to_wire(v)
+        items = {
+            f.name: getattr(v, f.name)
+            for f in dataclasses.fields(v)
+            if f.repr and not (getattr(v, f.name) is None and f.default is None)
+        }
+        return {camel(k): place_wire(x, what, key, _depth + 1) for k, x in items.items()}
     if isinstance(v, Mapping):
-        return {(camel(k) if isinstance(k, str) and "_" in k else k): place_wire(x) for k, x in v.items()}
+        return {
+            (camel(k) if isinstance(k, str) and "_" in k else k): place_wire(x, what, key, _depth + 1)
+            for k, x in v.items()
+        }
+    if isinstance(v, (list, tuple)):
+        return [place_wire(x, what, key, _depth + 1) for x in v]
     return v
 
 

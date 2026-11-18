@@ -214,10 +214,6 @@ class DaemonErrors(unittest.TestCase):
         self.assertIsInstance(error_from_envelope(None), OortInternalError)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @NEEDS_310
 class Places(unittest.TestCase):
     """Places in cloud mode: core's checks (refused with core's own words), the distance and
@@ -266,11 +262,41 @@ class Places(unittest.TestCase):
                 else:
                     self.assertAlmostEqual(d, v["distanceM"], places=12)
 
+    def test_each_number_is_written_as_javascript_writes_it(self):
+        from oortmem._place import js_number
+
+        for v in load("places.json")["numbers"]:
+            with self.subTest(number=v["input"]):
+                self.assertEqual(js_number(float(v["input"])), v["json"])
+
     def test_each_turn_ref_is_byte_for_byte_typescripts(self):
         from oortmem._place import check_place, remember_turn_ref, scrubbed_fact
 
         for v in load("places.json")["turnRefs"]:
-            with self.subTest(fact=v["fact"], place=v["place"]):
-                place = None if v["place"] is None else check_place(v["place"])
-                self.assertEqual(remember_turn_ref(v["fact"], v["type"], v["project"], v["at"], place), v["turnRef"])
-                self.assertEqual(remember_turn_ref(scrubbed_fact(v["fact"]), v["type"], v["project"], v["at"], place), v["request"])
+            # The same text with each astral character held as two surrogate code points, as a
+            # Python string can hold it: the same ref.
+            for split in (False, True):
+                fact = split_pairs(v["fact"]) if split else v["fact"]
+                raw = v["place"]
+                if split and raw is not None and "nodeId" in raw:
+                    raw = {**raw, "nodeId": split_pairs(raw["nodeId"])}
+                with self.subTest(fact=ascii(fact), place=ascii(raw)):
+                    place = None if raw is None else check_place(raw)
+                    self.assertEqual(remember_turn_ref(fact, v["type"], v["project"], v["at"], place), v["turnRef"])
+                    self.assertEqual(remember_turn_ref(scrubbed_fact(fact), v["type"], v["project"], v["at"], place), v["request"])
+
+
+def split_pairs(s):
+    """``s`` with each character outside the BMP as two surrogate code points."""
+    out = []
+    for c in s:
+        o = ord(c)
+        if o > 0xFFFF:
+            out.append(chr(0xD800 + ((o - 0x10000) >> 10)) + chr(0xDC00 + ((o - 0x10000) & 0x3FF)))
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+if __name__ == "__main__":
+    unittest.main()
