@@ -11,6 +11,7 @@ import { forgetMemory, forgottenValues, MAX_CHAIN, restatedValues } from './forg
 import { recordJudgment, type JudgmentInput } from './judgment.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
+import { occurredFor } from './observe.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
 
 const at = (day: number): string => new Date(Date.UTC(2026, 10, day)).toISOString();
@@ -811,5 +812,132 @@ describe('forgetMemory never changes a judgment', () => {
     expect({ ...after, supersedes: before.supersedes, updatedAt: before.updatedAt }).toEqual(
       before,
     );
+  });
+});
+
+describe('rewrittenOccurred', () => {
+  const rewriteTo = (text: string): MemoryWriter => ({
+    write: () => Promise.reject(new Error('not used')),
+    rewriteCurrent: async (m) => ({ text, stub: m.stub, entities: m.entities, type: m.type }),
+  });
+
+  /** A forgotten memory and a later one that restates its date, written in a turn at `turn`. */
+  async function restating(
+    turn: string,
+    offset: number,
+    text: string,
+    extra: Partial<Memory> = {},
+  ) {
+    const store = createMemoryStore();
+    const t = new Date(turn);
+    const a = makeMemory({
+      id: 'a',
+      text: 'The deploy of build 2.4 was on 2026-10-01.',
+      entities: ['deploy'],
+      createdAt: t.toISOString(),
+      validFrom: t.toISOString(),
+      supersededBy: 'b',
+      occurred: occurredFor('The deploy of build 2.4 was on 2026-10-01.', t, offset)!,
+    });
+    const b = makeMemory({
+      id: 'b',
+      text,
+      stub: 'deploy',
+      entities: ['deploy'],
+      createdAt: t.toISOString(),
+      validFrom: t.toISOString(),
+      supersedes: 'a',
+      occurred: occurredFor(text, t, offset)!,
+      ...extra,
+    });
+    await store.upsertMany(TG, [a, b]);
+    return { store, t, b };
+  }
+
+  it('forget.rewrite-reads-dates-in-the-offset-the-turn-was-written-in', async () => {
+    // Said at 23:30 in UTC-05:00: already the next day in UTC.
+    for (const [turn, offset] of [
+      ['2026-11-02T23:30:00-05:00', -300],
+      ['2026-11-02T00:30:00+02:00', 120],
+      ['2026-11-02T08:00:00+05:45', 345],
+      ['2026-11-02T09:00:00+13:00', 780],
+    ] as const) {
+      const text = 'The deploy was redone on 2026-10-08.';
+      const { store, t, b } = await restating(
+        turn,
+        offset,
+        'The deploy on 2026-10-01 was redone on 2026-10-08.',
+      );
+      await forgetMemory({ store, write: rewriteTo(text), now: new Date('2026-12-01') }, TG, 'a');
+      const after = (await store.get(TG, 'b'))!;
+      expect(after.occurred, turn).toEqual(occurredFor(text, t, offset));
+      expect(after.occurred?.at(-1), turn).toEqual(b.occurred?.at(-1));
+    }
+  });
+
+  it('forget.rewrite-reads-a-relative-date-against-the-turn-not-the-forget', async () => {
+    const text = 'The deploy was redone last Friday.';
+    const { store, t } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 was redone last Friday.',
+    );
+    await forgetMemory({ store, write: rewriteTo(text), now: new Date('2027-03-01') }, TG, 'a');
+    const after = (await store.get(TG, 'b'))!;
+    expect(after.occurred).toEqual(occurredFor(text, t));
+    expect(after.occurred?.[0]?.from).toBe('2026-10-30T00:00:00.000Z');
+  });
+
+  it('forget.rewrite-of-a-memory-without-event-time-adds-none', async () => {
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+    );
+    const b = (await store.get(TG, 'b'))!;
+    delete b.occurred;
+    await store.upsert(TG, b);
+    const r = await forgetMemory(
+      { store, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+    expect((await store.get(TG, 'b'))?.occurred).toBeUndefined();
+  });
+
+  it('forget.rewrite-without-a-mention-keeps-only-what-the-new-text-states', async () => {
+    const day = (d: string) => ({
+      from: `${d}T00:00:00.000Z`,
+      to: new Date(Date.parse(`${d}T00:00:00.000Z`) + 86_400_000).toISOString(),
+      precision: 'day' as const,
+      source: 'explicit' as const,
+    });
+    // Event time a caller set itself, with no day it was said.
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 was redone on 2026-10-08.',
+      { occurred: [day('2026-10-01'), day('2026-10-08')] },
+    );
+    await forgetMemory(
+      { store, write: rewriteTo('The deploy was redone on 2026-10-08.') },
+      TG,
+      'a',
+    );
+    expect((await store.get(TG, 'b'))?.occurred).toEqual([day('2026-10-08')]);
+
+    const other = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+      { occurred: [day('2026-10-01')] },
+    );
+    await forgetMemory(
+      { store: other.store, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect((await other.store.get(TG, 'b'))?.occurred).toBeUndefined();
   });
 });

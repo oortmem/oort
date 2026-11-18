@@ -332,7 +332,11 @@ most nine entries. Core's `checkOccurrences` checks a value as a store must on w
 refuses a write whose `occurred` fails it. The write path never sends one that would: what Oort
 reads from text keeps only times a store accepts (a year from 0 to 9999, so "5012 BC" adds
 nothing), and `observe` and `oort import` store a memory without event time rather than fail when
-the reading does not hold. An `occurred` a caller sets itself is checked strictly.
+the reading does not hold. An `occurred` a caller sets itself is checked strictly. When
+`forgetMemory` rewrites a later memory that restated a forgotten one, it reads the new text's dates
+again (`rewrittenOccurred`, against the turn the memory was written in, recovered from its
+`mention`) and sends the new `occurred` in the same guarded write as the text, so a store that
+replaces a memory's occurrences on every write keeps no date that only the forgotten text stated.
 
 A store that sets `occurrences: true` keeps `occurred` as written and has
 `occurredIn(grant, { from, to }, k, opts?)`: the memories in the grant with an occurrence that
@@ -346,7 +350,8 @@ A store without it still works: recall ranks the memories the lexical and dense 
 the `occurred` they come back with, or, without one, by their `validFrom` as the day they were said.
 `occurrenceConformance(name, make)` in `@oortmem/core/store-conformance` proves a store: the
 round trip and rewrite, the check on write, overlap with its bounds, a long occurrence found from
-its far end, the order and `k`, the grant and a spatial filter, and forget and cold memories.
+its far end, the order and `k`, the grant and a spatial filter, forget and cold memories, and the
+event dates of a memory a forget rewrites.
 
 ## Judging predictions
 

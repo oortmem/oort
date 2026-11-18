@@ -1,4 +1,5 @@
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
+import { checkOccurrences, occurrencesOf, type Occurrence } from './event-time.js';
 import { grantWrites, type Grant } from './grant.js';
 import { purgeFeedbackFor } from './feedback.js';
 import { purgePredictionsCiting } from './judgment.js';
@@ -274,6 +275,53 @@ function acceptable(forgotten: Text, old: Memory, w: WrittenMemory): boolean {
   );
 }
 
+const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
+
+/**
+ * The turn a memory's text was read against, recovered from the day it was said (its `mention`
+ * occurrence, which the write path reads from the turn's time and UTC offset): the offset that
+ * makes the day start at midnight, from UTC-10:45 to UTC+13 (UTC+14 reads as UTC-10, UTC-11 and
+ * UTC-12 as UTC+13 and UTC+12: the same instants, a day apart in name), and the time `validFrom`
+ * gives when it lies in that day, else the day's noon. Without a mention, `validFrom` (else
+ * `createdAt`) in UTC, as the store migration reads stored text.
+ */
+function turnOf(m: Memory, mention: Occurrence | undefined): { at: Date; offset: number } {
+  const from = mention === undefined ? NaN : Date.parse(mention.from);
+  const to = mention === undefined ? NaN : Date.parse(mention.to);
+  if (Number.isFinite(from) && to - from === DAY_MS) {
+    const east = ((-Math.round(from / MINUTE_MS) % 1440) + 1440) % 1440;
+    const offset = east <= 13 * 60 ? east : east - 1440;
+    const said = Date.parse(m.validFrom);
+    const at = said >= from && said < to ? said : from + DAY_MS / 2;
+    return { at: new Date(at), offset };
+  }
+  const said = Date.parse(m.validFrom);
+  return { at: new Date(Number.isFinite(said) ? said : Date.parse(m.createdAt)), offset: 0 };
+}
+
+/**
+ * A rewritten memory's event time: the dates its new text states, read as the write path reads
+ * them (`occurrencesOf`, against the turn it was written in, `turnOf`), then the day it was said,
+ * kept as it was. A date only the old text stated is gone. Undefined when it had no event time,
+ * or when, without a day it was said, the new text states no date. When the reading fails or
+ * returns what a store would refuse, only the day it was said is kept, as `observe` keeps it.
+ */
+export function rewrittenOccurred(m: Memory, text: string): Occurrence[] | undefined {
+  if (m.occurred === undefined) return undefined;
+  const mention = m.occurred.find((o) => o.source === 'mention');
+  const kept = mention === undefined ? [] : [{ ...mention }];
+  let out: Occurrence[];
+  try {
+    const { at, offset } = turnOf(m, mention);
+    const stated = occurrencesOf(text, at, offset).filter((o) => o.source !== 'mention');
+    out = checkOccurrences([...stated, ...kept]);
+  } catch {
+    out = kept;
+  }
+  return out.length === 0 ? undefined : out;
+}
+
 /** Runs `fn` over `items`, at most `limit` at once, results in order. */
 async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = [];
@@ -301,7 +349,9 @@ async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>)
  * 2. The writer (`MemoryWriter.rewriteCurrent`) gets that memory alone, never the forgotten one,
  *    and states its current fact without history. A rewrite is kept only when `acceptable`: no
  *    new words, no longer, none of the values left. Re-embedded, it loses the wordings that
- *    described its old text. One the writer leaves as it was is reported as `unchanged`.
+ *    described its old text, and its event time is read again from the new text
+ *    (`rewrittenOccurred`): a date only the old text stated is gone, the day it was said stays.
+ *    One the writer leaves as it was is reported as `unchanged`.
  * 3. The chain is re-linked over the gap, and the rewrites and links land in one guarded write
  *    (`upsertManyIfUnchanged` where the store has it): a memory changed meanwhile is reported
  *    as `changed`. Then the memory is forgotten.
@@ -414,6 +464,10 @@ export async function forgetMemory(
       // The old vector was computed from the old text: never kept beside the new one.
       delete next.embedding;
       if (embedding !== undefined) next.embedding = embedding;
+      // So is its event time: read again from the new text, written in the same guarded write.
+      const occurred = rewrittenOccurred(full, w.text);
+      delete next.occurred;
+      if (occurred !== undefined) next.occurred = occurred;
       return { m, next };
     } catch {
       return { m, reason: 'failed' as const };
