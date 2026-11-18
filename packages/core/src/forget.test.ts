@@ -1079,4 +1079,79 @@ describe('rewrittenOccurred', () => {
     expect((await store.get(TG, 'b'))?.validTo).toBeNull();
     expect((await store.get(TG, 'c'))?.validTo).toBe(end);
   });
+
+  it('forget.a-start-a-correction-set-itself-is-carried-no-further', async () => {
+    const store = createMemoryStore();
+    const t = '2026-11-02T10:00:00.000Z';
+    const write = (answer: string): Decision => ({
+      stage: 'write',
+      question: 'action',
+      answer,
+      probability: 1,
+    });
+    const interval = (answer: string): Decision => ({
+      stage: 'temporal',
+      question: 'interval',
+      answer,
+      probability: 1,
+    });
+    const start = '2026-10-01T00:00:00.000Z';
+    const end = '2026-10-09T00:00:00.000Z';
+    const base = { createdAt: t, updatedAt: t, entities: ['release'] };
+    const corrected = { expiredAt: t, endReason: 'corrected' as const };
+    await store.upsertMany(TG, [
+      makeMemory({
+        ...base,
+        validFrom: t,
+        id: 'a',
+        text: 'The release is on 2026-10-01.',
+        supersededBy: 'b',
+      }),
+      makeMemory({
+        ...base,
+        ...corrected,
+        id: 'b',
+        text: 'The release moved from 2026-10-01 to 2026-10-08.',
+        validFrom: start,
+        validTo: end,
+        supersedes: 'a',
+        supersededBy: 'c',
+        source: { harness: 'test', decisions: [interval(`${start} .. ${end}`), write('ADD')] },
+      }),
+      // Its own text sets the same start (and restates none of a's values); its end is b's.
+      makeMemory({
+        ...base,
+        ...corrected,
+        id: 'c',
+        text: 'Correction: the beta release is out since October 1.',
+        validFrom: start,
+        validTo: end,
+        supersedes: 'b',
+        supersededBy: 'd',
+        source: { harness: 'test', decisions: [interval(`${start} .. open`), write('CORRECT')] },
+      }),
+      // Copied c's start and end.
+      makeMemory({
+        ...base,
+        id: 'd',
+        text: 'Correction: it is the stable release.',
+        validFrom: start,
+        validTo: end,
+        supersedes: 'c',
+        source: { harness: 'test', decisions: [write('CORRECT')] },
+      }),
+    ]);
+    const r = await forgetMemory(
+      { store, write: rewriteTo('The release is 2026-10-08.'), now: new Date('2026-11-18') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The release is 2026-10-08.' }]);
+    expect((await store.get(TG, 'b'))?.validTo).toBeNull();
+    // The end went down the chain; the start c set itself stays, and so does d's copy of it.
+    const c = (await store.get(TG, 'c'))!;
+    const d = (await store.get(TG, 'd'))!;
+    expect([c.validFrom, c.validTo]).toEqual([start, null]);
+    expect([d.validFrom, d.validTo]).toEqual([start, null]);
+  });
 });

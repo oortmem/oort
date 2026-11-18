@@ -641,11 +641,15 @@ export async function forgetMemory(
       if (embedding !== undefined) next.embedding = embedding;
       // So are its event time and the validity bounds its text set: read again from the new
       // text against the turn it was written in, written in the same guarded write.
-      const turn = rewriteTurnOf(full);
-      const occurred = rewrittenOccurred(full, w.text, turn);
+      // The live row holds its validity, links, event time and decisions; a cold copy keeps
+      // them as they were when it went cold (a supersede since writes only the live row). Only
+      // the words come from the cold copy, as the writer read them.
+      const live: Memory = { ...m, text: full.text, stub: full.stub, entities: full.entities };
+      const turn = rewriteTurnOf(live);
+      const occurred = rewrittenOccurred(live, w.text, turn);
       delete next.occurred;
       if (occurred !== undefined) next.occurred = occurred;
-      const validity = rewrittenValidity(full, w.text, turn);
+      const validity = rewrittenValidity(live, w.text, turn);
       next.validFrom = validity.validFrom;
       next.validTo = validity.validTo;
       if (validity.bounds.validFrom !== undefined || validity.bounds.validTo !== undefined) {
@@ -658,12 +662,12 @@ export async function forgetMemory(
       }
       // A new start or end replaces the old one in the memories that corrected it and copied it.
       const ends =
-        validity.endRead && validity.validTo !== full.validTo
-          ? { from: full.validTo, to: validity.validTo }
+        validity.endRead && validity.validTo !== live.validTo
+          ? { from: live.validTo, to: validity.validTo }
           : undefined;
       const starts =
-        validity.startRead && validity.validFrom !== full.validFrom
-          ? { from: full.validFrom, to: validity.validFrom }
+        validity.startRead && validity.validFrom !== live.validFrom
+          ? { from: live.validFrom, to: validity.validFrom }
           : undefined;
       return { m, next, starts, ends };
     } catch {
@@ -686,7 +690,7 @@ export async function forgetMemory(
   const listed = (cid: string) => outcome.notRewritten.some((x) => x.id === cid);
   for (const r of results) {
     if (!('next' in r) || (r.starts === undefined && r.ends === undefined)) continue;
-    const { starts, ends } = r;
+    let { starts, ends } = r;
     let prior: Memory = r.m;
     const walkedCorrections = new Set<string>([prior.id]);
     while (prior.endReason === 'corrected' && prior.supersededBy !== null) {
@@ -702,13 +706,17 @@ export async function forgetMemory(
         own.validFrom === undefined &&
         (c.validFrom === starts.from || c.validFrom === startBefore(starts.from, c.validTo));
       if (!takesStart && !takesEnd) break;
+      // A correction that kept a bound (its own text set it, or it no longer holds the old one)
+      // is what later corrections copied: that bound is carried no further.
+      if (!takesStart) starts = undefined;
+      if (!takesEnd) ends = undefined;
       if (!grantWrites(grant, c)) {
         if (!listed(c.id)) outcome.notRewritten.push({ id: c.id, reason: 'not-writable' });
         break;
       }
       const base = changed.get(c.id)?.next ?? c;
-      const validTo = takesEnd ? (ends?.to ?? null) : base.validTo;
-      const validFrom = startBefore(takesStart ? starts!.to : base.validFrom, validTo);
+      const validTo = ends !== undefined ? ends.to : base.validTo;
+      const validFrom = startBefore(starts !== undefined ? starts.to : base.validFrom, validTo);
       changed.set(c.id, {
         was: changed.get(c.id)?.was ?? c,
         next: { ...base, validFrom, validTo, updatedAt: iso },

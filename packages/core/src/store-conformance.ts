@@ -2400,14 +2400,21 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
      * text stated, in the memory or in `occurredIn`. `how.refinedFrom` writes the later one with
      * that text first and refines it to `restating`; `how.newer` writes a newer memory that
      * supersedes it, or with `how.corrects` corrects it, and `how.newest` one that supersedes
-     * the newer one, as `observe` writes each.
+     * the newer one, as `observe` writes each. `how.cold` moves the later one to the cold tier
+     * before the newer one is written, so its cold copy keeps the validity it had then.
      */
     const forgetRestated = async (
       restating: string,
       rewritten: string,
       first = 'The deploy of build 2.4 was on 2026-10-01.',
       entities = ['deploy'],
-      how: { newer?: string; corrects?: boolean; newest?: string; refinedFrom?: string } = {},
+      how: {
+        newer?: string;
+        corrects?: boolean;
+        newest?: string;
+        refinedFrom?: string;
+        cold?: boolean;
+      } = {},
     ) => {
       const turn = new Date('2026-11-02T10:00:00.000Z');
       const wrote = (answer: string): Decision => ({
@@ -2469,6 +2476,13 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
           },
         };
       }
+      if (how.cold === true) {
+        later = { ...later, embedding: vec(1, 2, 3, 4) };
+        await store.upsertMany(TG, [original, later]);
+        expect((await store.coldPut(TG, later)).skipped).toEqual([]);
+        later = (await store.get(TG, 'later'))!;
+        expect(later.tier).toBe('cold');
+      }
       const writes = [original, later];
       if (how.newer !== undefined && how.corrects === true) {
         // A correction keeps bounds its own text sets, else takes the prior's; the prior keeps
@@ -2521,10 +2535,12 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
           type: m.type,
         }),
       };
+      const coldCopy = await store.coldGet(TG, 'later');
       const outcome = await forgetMemory({ store, write }, TG, 'original');
       expect(outcome.rewritten).toEqual([{ id: 'later', text: rewritten }]);
       return {
         turn,
+        coldCopy,
         before: later,
         later: (await store.get(TG, 'later'))!,
         newer: await store.get(TG, 'newer'),
@@ -2682,6 +2698,38 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       expect([before.validFrom, before.validTo]).toEqual(['2026-10-01T00:00:00.000Z', null]);
       expect(later.validFrom).toBe(turn.toISOString());
       expect([newer?.validFrom, newer?.validTo]).toEqual([turn.toISOString(), null]);
+    });
+
+    it('occurrences.forget-rewrite-of-a-cold-memory-keeps-the-end-its-live-row-has', async () => {
+      const { before, coldCopy, later } = await forgetRestated(
+        'The deploy on 2026-10-01 used build 2.5.',
+        'The deploy used build 2.5.',
+        undefined,
+        undefined,
+        { cold: true, newer: 'Starting 2026-12-01 the deploy uses build 2.6.' },
+      );
+      // Superseded while cold: the live row has the end, the cold copy does not.
+      expect(before.validTo).toBe('2026-12-01T00:00:00.000Z');
+      expect(coldCopy?.validTo).toBeNull();
+      expect(later.validTo).toBe(before.validTo);
+      expect(later.endReason).toBe('superseded');
+      expect(later.supersededBy).toBe('newer');
+      expect(await read('2026-10-01', '2026-10-02')).toEqual([]);
+    });
+
+    it('occurrences.forget-rewrite-of-a-cold-memory-reads-its-validity-from-the-live-row', async () => {
+      const { before, coldCopy, later } = await forgetRestated(
+        'The freeze, still until 2026-11-30, now blocks hotfixes.',
+        'The freeze now blocks hotfixes.',
+        'The freeze runs until 2026-11-30.',
+        ['freeze'],
+        { cold: true, newer: 'Starting 2026-12-05 the freeze is lifted.' },
+      );
+      // The cold copy has the end its text set; a supersede has since moved it on the live row.
+      expect(coldCopy?.validTo).toBe('2026-12-01T00:00:00.000Z');
+      expect(before.validTo).toBe('2026-12-05T00:00:00.000Z');
+      expect(later.validTo).toBe(before.validTo);
+      expect(isCurrent(later, new Date('2026-12-06T00:00:00.000Z'))).toBe(false);
     });
 
     it('occurrences.forget-rewrite-reads-an-end-a-refine-carried-over', async () => {
