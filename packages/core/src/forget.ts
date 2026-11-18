@@ -1,7 +1,7 @@
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
 import { checkOccurrences, occurrencesOf, type Occurrence } from './event-time.js';
 import { grantWrites, type Grant } from './grant.js';
-import { factInterval, type FactInterval } from './temporal.js';
+import { factInterval, startBefore, type FactInterval } from './temporal.js';
 import { purgeFeedbackFor } from './feedback.js';
 import { purgePredictionsCiting } from './judgment.js';
 import { isJudgment, type Decision, type Memory } from './model.js';
@@ -285,9 +285,25 @@ export interface RewriteTurn {
   offset: number;
 }
 
-/** The bounds the write path recorded reading from the text (its last `temporal/interval`). */
+/** Where one write's decisions end: the write path's action, or a forget's rewrite. */
+const endsWrite = (d: Decision): boolean =>
+  (d.stage === 'write' && d.question === 'action') ||
+  (d.stage === 'forget' && d.question === 'rewritten');
+
+/**
+ * The bounds the write path recorded reading from the text, in the latest write's own
+ * `temporal/interval` decision: the decisions after the write before it, up to its end. A refine
+ * keeps the decisions of the writes before it, and theirs describe an earlier text. Every
+ * decision counts when none ends a write.
+ */
 function recordedInterval(m: Memory): FactInterval | undefined {
-  const d = m.source.decisions.findLast((x) => x.stage === 'temporal' && x.question === 'interval');
+  const ds = m.source.decisions;
+  const ends = ds.flatMap((d, i) => (endsWrite(d) ? [i] : []));
+  const last = ends.at(-1) ?? ds.length - 1;
+  const first = ends.length >= 2 ? (ends.at(-2) as number) + 1 : 0;
+  const d = ds
+    .slice(first, last + 1)
+    .findLast((x) => x.stage === 'temporal' && x.question === 'interval');
   if (d === undefined) return undefined;
   const [from, to] = d.answer.split(' .. ');
   return {
@@ -325,7 +341,7 @@ function intervalOf(text: string, turn: RewriteTurn): FactInterval {
  * (UTC-11:00 and UTC+13:00, for example): each one in UTC-12:00 to UTC+14:00 is tried by reading
  * the old text again, and the one that gives back the stored `occurred` (and the bounds the write
  * path recorded, when it recorded any) is taken. When both or neither do, the offset is taken in
- * UTC-10:45 to UTC+13:00, so a turn in UTC-11:00, UTC-12:00, UTC+13:45 or UTC+14:00 whose text
+ * UTC-10:59 to UTC+13:00, so a turn in UTC-11:00, UTC-12:00, UTC+13:45 or UTC+14:00 whose text
  * states no date that tells them apart reads a day off in name (a date on its own, a month or a
  * weekday then lands 24 hours away, a month and day near the new year a year away).
  *
@@ -395,11 +411,14 @@ export function rewrittenOccurred(
 }
 
 /**
- * A rewritten memory's validity: each bound its old text set (`factInterval`, as the write path
+ * A rewritten memory's validity: each bound its old text set (`factInterval`, as the latest write
  * recorded it or as it reads again) is read again from the new text against the same turn. A
- * bound the new text does not set falls back as the write path's does: the turn's time for
- * `validFrom`, none for `validTo`. A bound that did not come from the text (a supersede's end,
- * a start moved before an end) is kept. `bounds` is what the new text sets.
+ * start the write path moved back a day before that end (`startBefore`) counts as set by the
+ * text too. A bound the new text does not set falls back as the write path's does: the turn's
+ * time for `validFrom`, none for `validTo`. The end of a memory that was superseded or corrected
+ * is never changed: it may be where the next fact starts. Any other bound is kept, and a start is
+ * then moved back before the end as the write path moves it, so the end never comes first.
+ * `bounds` is what the new text sets.
  */
 export function rewrittenValidity(
   m: Memory,
@@ -411,18 +430,17 @@ export function rewrittenValidity(
   const fromText = (v: string | null, said: string | undefined, read: string | undefined) =>
     v !== null && (v === said || v === read);
   const bounds = intervalOf(text, turn);
-  const toChanges = fromText(m.validTo, recorded.validTo, old.validTo);
-  const validTo = toChanges ? (bounds.validTo ?? null) : m.validTo;
-  if (!fromText(m.validFrom, recorded.validFrom, old.validFrom)) {
-    return { validFrom: m.validFrom, validTo, bounds };
-  }
-  const start = bounds.validFrom ?? turn.at.toISOString();
-  // As the write path does: a start moved back a day before an end it would pass.
-  const validFrom =
-    validTo !== null && Date.parse(validTo) <= Date.parse(start)
-      ? new Date(Date.parse(validTo) - DAY_MS).toISOString()
-      : start;
-  return { validFrom, validTo, bounds };
+  const endFromText = fromText(m.validTo, recorded.validTo, old.validTo);
+  const ended =
+    m.supersededBy !== null || m.endReason === 'superseded' || m.endReason === 'corrected';
+  const validTo = endFromText && !ended ? (bounds.validTo ?? null) : m.validTo;
+  const startFromText =
+    fromText(m.validFrom, recorded.validFrom, old.validFrom) ||
+    (endFromText &&
+      m.validFrom ===
+        startBefore(recorded.validFrom ?? old.validFrom ?? turn.at.toISOString(), m.validTo));
+  const start = startFromText ? (bounds.validFrom ?? turn.at.toISOString()) : m.validFrom;
+  return { validFrom: startBefore(start, validTo), validTo, bounds };
 }
 
 /** Runs `fn` over `items`, at most `limit` at once, results in order. */

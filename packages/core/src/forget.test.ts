@@ -10,7 +10,7 @@ import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapt
 import { forgetMemory, forgottenValues, MAX_CHAIN, restatedValues } from './forget.js';
 import { recordJudgment, type JudgmentInput } from './judgment.js';
 import { createMemoryStore } from './memory-store.js';
-import type { Memory } from './model.js';
+import type { Decision, Memory } from './model.js';
 import type { Occurrence } from './event-time.js';
 import { occurredFor } from './observe.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
@@ -973,5 +973,34 @@ describe('rewrittenOccurred', () => {
     expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
     expect(await store.get(TG, 'a')).toBeNull();
     expect((await store.get(TG, 'b'))?.occurred).toBeUndefined();
+  });
+
+  it('forget.rewrite-reads-only-the-latest-writes-own-interval', async () => {
+    const end = '2026-12-01T00:00:00.000Z';
+    // Refined: the end came with the earlier text, and the refine kept it without stating one.
+    const decisions: Decision[] = [
+      { stage: 'temporal', question: 'interval', answer: `turn .. ${end}`, probability: 1 },
+      { stage: 'write', question: 'action', answer: 'ADD', probability: 1 },
+      {
+        stage: 'refine',
+        question: 'previous-text',
+        answer: 'The deploy holds until 2026-11-30.',
+        probability: 1,
+      },
+      { stage: 'write', question: 'action', answer: 'REFINE', probability: 1 },
+    ];
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+      { validTo: end, source: { harness: 'test', decisions } },
+    );
+    const r = await forgetMemory(
+      { store, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+    expect((await store.get(TG, 'b'))?.validTo).toBe(end);
   });
 });

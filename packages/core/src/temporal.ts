@@ -59,6 +59,17 @@ function leadIn(text: string, r: chrono.ParsedResult): string {
   return `${before} ${own}`.toLowerCase().trimEnd();
 }
 
+/**
+ * A fact's start, moved back a day before an end it would pass, as the write path stores it: an
+ * end already in the past ("the freeze ran until yesterday") is kept, and the fact is stored
+ * already ended.
+ */
+export function startBefore(from: string, to: string | null): string {
+  return to !== null && Date.parse(to) <= Date.parse(from)
+    ? new Date(Date.parse(to) - DAY_MS).toISOString()
+    : from;
+}
+
 export interface FactInterval {
   /** ISO start of the fact's validity, when the text bounds it ("since", "starting"). */
   validFrom?: string;

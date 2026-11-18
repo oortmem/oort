@@ -26,7 +26,7 @@ import {
 import type { MemoryStore, MemoryWriter, ScopeFilter } from './adapters.js';
 import { forgetMemory } from './forget.js';
 import { occurredFor } from './observe.js';
-import { factInterval } from './temporal.js';
+import { factInterval, startBefore } from './temporal.js';
 import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from './grant.js';
 import { isCurrent, type Memory, type Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
@@ -2404,6 +2404,7 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       rewritten: string,
       first = 'The deploy of build 2.4 was on 2026-10-01.',
       entities = ['deploy'],
+      newer?: string,
     ) => {
       const turn = new Date('2026-11-02T10:00:00.000Z');
       const remembered = (id: string, text: string, extra: Partial<Memory> = {}) => {
@@ -2415,7 +2416,7 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
           text,
           stub: text.toLowerCase().replace(/\.$/, ''),
           entities,
-          validFrom: bounds.validFrom ?? turn.toISOString(),
+          validFrom: startBefore(bounds.validFrom ?? turn.toISOString(), bounds.validTo ?? null),
           validTo: bounds.validTo ?? null,
           createdAt: turn.toISOString(),
           updatedAt: turn.toISOString(),
@@ -2437,9 +2438,21 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
         });
       };
       const original = remembered('original', first, { supersededBy: 'later' });
-      const later = remembered('later', restating, { supersedes: 'original' });
-      await store.upsertMany(TG, [original, later]);
-      expect(await read('2026-10-01', '2026-10-02')).toContain('later');
+      let later = remembered('later', restating, { supersedes: 'original' });
+      const writes = [original, later];
+      if (newer !== undefined) {
+        // A newer fact supersedes it, closing it where the newer one starts, as observe does.
+        const n = remembered('newer', newer, { supersedes: 'later' });
+        later = {
+          ...later,
+          validTo:
+            Date.parse(n.validFrom) > Date.parse(later.validFrom) ? n.validFrom : later.validFrom,
+          endReason: 'superseded',
+          supersededBy: 'newer',
+        };
+        writes.splice(1, 1, later, n);
+      }
+      await store.upsertMany(TG, writes);
       const write: MemoryWriter = {
         write: () => Promise.reject(new Error('not used')),
         rewriteCurrent: async (m) => ({
@@ -2455,10 +2468,11 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
     };
 
     it('occurrences.forget-rewrite-drops-a-date-only-the-forgotten-text-stated', async () => {
-      const { turn, later } = await forgetRestated(
+      const { turn, before, later } = await forgetRestated(
         'The deploy on 2026-10-01 used build 2.5.',
         'The deploy used build 2.5.',
       );
+      expect(before.occurred?.[0]).toEqual(day('2026-10-01'));
       expect(await read('2026-10-01', '2026-10-02')).toEqual([]);
       // The day it was said stays: the rewritten text was still said then.
       expect(later.occurred).toEqual(occurredFor('The deploy used build 2.5.', turn));
@@ -2495,6 +2509,49 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       expect([later.validFrom, later.validTo]).toEqual([turn.toISOString(), null]);
       expect(isCurrent(later, new Date('2026-10-02T12:00:00.000Z'))).toBe(false);
       expect(isCurrent(later, new Date('2026-11-03T00:00:00.000Z'))).toBe(true);
+    });
+
+    it('occurrences.forget-rewrite-drops-a-start-moved-before-a-forgotten-end', async () => {
+      const { turn, before, later } = await forgetRestated(
+        'The freeze ran until 2026-10-01 and has ended.',
+        'The freeze has ended.',
+        'The freeze runs until 2026-10-01.',
+        ['freeze'],
+      );
+      // The end was already past, so the start was moved back a day before it.
+      expect([before.validFrom, before.validTo]).toEqual([
+        '2026-10-01T00:00:00.000Z',
+        '2026-10-02T00:00:00.000Z',
+      ]);
+      expect([later.validFrom, later.validTo]).toEqual([turn.toISOString(), null]);
+    });
+
+    it('occurrences.forget-rewrite-keeps-the-end-a-newer-fact-gave', async () => {
+      const { before, later } = await forgetRestated(
+        'The freeze, as before until 2026-11-30, now also blocks hotfixes.',
+        'The freeze now also blocks hotfixes.',
+        'The freeze runs until 2026-11-30.',
+        ['freeze'],
+        'Starting 2026-12-01 the freeze is lifted.',
+      );
+      // Its text's end and the newer fact's start are the same midnight.
+      expect(before.validTo).toBe('2026-12-01T00:00:00.000Z');
+      expect(later.validTo).toBe(before.validTo);
+      expect(later.supersededBy).toBe('newer');
+      const after = new Date('2026-12-02T00:00:00.000Z');
+      expect(isCurrent(later, after)).toBe(false);
+      expect(isCurrent((await store.get(TG, 'newer'))!, after)).toBe(true);
+    });
+
+    it('occurrences.forget-rewrite-never-leaves-the-end-before-the-start', async () => {
+      const { later } = await forgetRestated(
+        'The freeze, set until 2026-12-01 before, ran until 2026-10-15.',
+        'The freeze ran until 2026-10-15.',
+        'The freeze is set until 2026-12-01.',
+        ['freeze'],
+      );
+      expect(later.validTo).toBe('2026-10-16T00:00:00.000Z');
+      expect(Date.parse(later.validFrom)).toBeLessThan(Date.parse(later.validTo!));
     });
   });
 }
