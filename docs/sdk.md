@@ -150,7 +150,10 @@ question about a state then, "which port did we use on 2 April", picks as-of),
 **`forget` locally** also rewrites the later memories of the forgotten one's supersede chain that
 restate one of its values ("changed from 3000 to 8080"), before it returns: the memory writer gets
 each such memory alone, never the forgotten one, and states its current fact; a rewrite that adds
-a word or keeps a value is not used. `rewritten` lists the ones rewritten. Any left as they were
+a word or keeps a value is not used. A rewritten memory's event dates (`occurred`), and any validity
+bound its text set, are read again from its new text, so a date only the forgotten text stated is
+removed. `rewritten` lists the ones
+rewritten. Any left as they were
 (no writer, a failed or rejected rewrite, a concurrent change) are listed in `notRewritten`; check
 or forget them too. See [Memories that restated it](cli.md#memories-that-restated-it). In Oort
 Cloud the cloud rewrites them, and the result carries the same `rewritten` and `notRewritten`

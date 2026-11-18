@@ -26,7 +26,7 @@ import { capObservation } from './cap.js';
 import { isJudgment, type Decision, type Memory, type Scope } from './model.js';
 import { checkPlace, frameOf, placeDistance, type Place } from './place.js';
 import { scrubObservation } from './scrub.js';
-import { checkWriterDate, factInterval, utcOffset } from './temporal.js';
+import { checkWriterDate, factInterval, startBefore, utcOffset } from './temporal.js';
 import { checkOccurrences, occurrencesOf, type Occurrence } from './event-time.js';
 import { tokenizeLexical } from './tokenize.js';
 
@@ -149,7 +149,6 @@ async function confirm(
   if (m !== null) await store.upsert(grant, { ...m, lastConfirmedAt: nowIso });
 }
 
-const DAY_MS = 86_400_000;
 const GATE_THRESHOLD = 0.5;
 const HOT_SALIENCE = 0.8;
 const CANDIDATES = 5;
@@ -338,12 +337,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       probability: 1,
     });
   }
-  // A start, moved back a day before an end it would pass: an end already in the past ("the
-  // freeze ran until yesterday") is kept, and the fact is stored already ended.
-  const startBefore = (from: string, to: string | null): string =>
-    to !== null && Date.parse(to) <= Date.parse(from)
-      ? new Date(Date.parse(to) - DAY_MS).toISOString()
-      : from;
+  // A start, moved back a day before an end it would pass (`startBefore`).
   const validTo = bounds.validTo ?? null;
   const validFrom = startBefore(bounds.validFrom ?? turnAt.toISOString(), validTo);
   // When what it tells of happened, read against the turn's own time, then the turn's

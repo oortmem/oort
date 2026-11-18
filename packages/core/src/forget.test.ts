@@ -10,7 +10,9 @@ import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapt
 import { forgetMemory, forgottenValues, MAX_CHAIN, restatedValues } from './forget.js';
 import { recordJudgment, type JudgmentInput } from './judgment.js';
 import { createMemoryStore } from './memory-store.js';
-import type { Memory } from './model.js';
+import type { Decision, Memory } from './model.js';
+import type { Occurrence } from './event-time.js';
+import { occurredFor } from './observe.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
 
 const at = (day: number): string => new Date(Date.UTC(2026, 10, day)).toISOString();
@@ -811,5 +813,345 @@ describe('forgetMemory never changes a judgment', () => {
     expect({ ...after, supersedes: before.supersedes, updatedAt: before.updatedAt }).toEqual(
       before,
     );
+  });
+});
+
+describe('rewrittenOccurred', () => {
+  const rewriteTo = (text: string): MemoryWriter => ({
+    write: () => Promise.reject(new Error('not used')),
+    rewriteCurrent: async (m) => ({ text, stub: m.stub, entities: m.entities, type: m.type }),
+  });
+
+  /** A forgotten memory and a later one that restates its date, written in a turn at `turn`. */
+  async function restating(
+    turn: string,
+    offset: number,
+    text: string,
+    extra: Partial<Memory> = {},
+  ) {
+    const store = createMemoryStore();
+    const t = new Date(turn);
+    const a = makeMemory({
+      id: 'a',
+      text: 'The deploy of build 2.4 was on 2026-10-01.',
+      entities: ['deploy'],
+      createdAt: t.toISOString(),
+      validFrom: t.toISOString(),
+      supersededBy: 'b',
+      occurred: occurredFor('The deploy of build 2.4 was on 2026-10-01.', t, offset)!,
+    });
+    const b = makeMemory({
+      id: 'b',
+      text,
+      stub: 'deploy',
+      entities: ['deploy'],
+      createdAt: t.toISOString(),
+      validFrom: t.toISOString(),
+      supersedes: 'a',
+      occurred: occurredFor(text, t, offset)!,
+      ...extra,
+    });
+    await store.upsertMany(TG, [a, b]);
+    return { store, t, b };
+  }
+
+  it('forget.rewrite-reads-dates-in-the-offset-the-turn-was-written-in', async () => {
+    // Said at 23:30 in UTC-05:00: already the next day in UTC.
+    for (const [turn, offset] of [
+      ['2026-11-02T23:30:00-05:00', -300],
+      ['2026-11-02T00:30:00+02:00', 120],
+      ['2026-11-02T08:00:00+05:45', 345],
+      ['2026-11-02T09:00:00+13:00', 780],
+      // Each also makes the day start where a turn 24 hours away in offset does.
+      ['2026-11-02T09:00:00-11:00', -660],
+      ['2026-11-02T09:00:00+14:00', 840],
+      ['2026-11-02T09:00:00+13:45', 825],
+    ] as const) {
+      const text = 'The deploy was redone on 2026-10-08.';
+      const { store, t, b } = await restating(
+        turn,
+        offset,
+        'The deploy on 2026-10-01 was redone on 2026-10-08.',
+      );
+      await forgetMemory({ store, write: rewriteTo(text), now: new Date('2026-12-01') }, TG, 'a');
+      const after = (await store.get(TG, 'b'))!;
+      expect(after.occurred, turn).toEqual(occurredFor(text, t, offset));
+      expect(after.occurred?.at(-1), turn).toEqual(b.occurred?.at(-1));
+    }
+  });
+
+  it('forget.rewrite-reads-a-relative-date-against-the-turn-not-the-forget', async () => {
+    const text = 'The deploy was redone last Friday.';
+    const { store, t } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 was redone last Friday.',
+    );
+    await forgetMemory({ store, write: rewriteTo(text), now: new Date('2027-03-01') }, TG, 'a');
+    const after = (await store.get(TG, 'b'))!;
+    expect(after.occurred).toEqual(occurredFor(text, t));
+    expect(after.occurred?.[0]?.from).toBe('2026-10-30T00:00:00.000Z');
+  });
+
+  it('forget.rewrite-of-a-memory-without-event-time-adds-none', async () => {
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+    );
+    const b = (await store.get(TG, 'b'))!;
+    delete b.occurred;
+    await store.upsert(TG, b);
+    const r = await forgetMemory(
+      { store, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+    expect((await store.get(TG, 'b'))?.occurred).toBeUndefined();
+  });
+
+  it('forget.rewrite-without-a-mention-keeps-only-what-the-new-text-states', async () => {
+    const day = (d: string) => ({
+      from: `${d}T00:00:00.000Z`,
+      to: new Date(Date.parse(`${d}T00:00:00.000Z`) + 86_400_000).toISOString(),
+      precision: 'day' as const,
+      source: 'explicit' as const,
+    });
+    // Event time a caller set itself, with no day it was said.
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 was redone on 2026-10-08.',
+      { occurred: [day('2026-10-01'), day('2026-10-08')] },
+    );
+    await forgetMemory(
+      { store, write: rewriteTo('The deploy was redone on 2026-10-08.') },
+      TG,
+      'a',
+    );
+    expect((await store.get(TG, 'b'))?.occurred).toEqual([day('2026-10-08')]);
+
+    const other = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+      { occurred: [day('2026-10-01')] },
+    );
+    await forgetMemory(
+      { store: other.store, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect((await other.store.get(TG, 'b'))?.occurred).toBeUndefined();
+  });
+
+  it('forget.a-mention-a-store-would-refuse-leaves-no-event-time-and-the-forget-finishes', async () => {
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+    );
+    // A row read back with a mention that carries a field no store accepts.
+    const reading: MemoryStore = {
+      ...store,
+      get: async (g, id) => {
+        const m = await store.get(g, id);
+        if (m?.id === 'b' && m.occurred !== undefined) {
+          m.occurred = m.occurred.map((o) =>
+            o.source === 'mention' ? ({ ...o, extra: 1 } as Occurrence) : o,
+          );
+        }
+        return m;
+      },
+    };
+    const r = await forgetMemory(
+      { store: reading, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+    expect(await store.get(TG, 'a')).toBeNull();
+    expect((await store.get(TG, 'b'))?.occurred).toBeUndefined();
+  });
+
+  it('forget.rewrite-reads-an-end-carried-over-unless-a-later-write-recorded-another', async () => {
+    const end = '2026-12-01T00:00:00.000Z';
+    const interval = (to: string): Decision => ({
+      stage: 'temporal',
+      question: 'interval',
+      answer: `turn .. ${to}`,
+      probability: 1,
+    });
+    const refined = (between: Decision[]): Decision[] => [
+      interval(end),
+      { stage: 'write', question: 'action', answer: 'ADD', probability: 1 },
+      ...between,
+      {
+        stage: 'refine',
+        question: 'previous-text',
+        answer: 'The deploy holds until 2026-11-30.',
+        probability: 1,
+      },
+      { stage: 'write', question: 'action', answer: 'REFINE', probability: 1 },
+    ];
+    const forgetWith = async (decisions: Decision[]) => {
+      const { store } = await restating(
+        '2026-11-04T10:00:00.000Z',
+        0,
+        'The deploy on 2026-10-01 used build 2.5.',
+        { validTo: end, source: { harness: 'test', decisions } },
+      );
+      const r = await forgetMemory(
+        { store, write: rewriteTo('The deploy used build 2.5.') },
+        TG,
+        'a',
+      );
+      expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+      return (await store.get(TG, 'b'))?.validTo;
+    };
+    // The refine set no end and carried the earlier text's over: read again, there is none.
+    expect(await forgetWith(refined([]))).toBeNull();
+    // A later write recorded another end: the earlier one no longer says where this one came from.
+    expect(await forgetWith(refined([interval('2026-12-15T00:00:00.000Z')]))).toBe(end);
+  });
+
+  it('forget.a-correction-changed-meanwhile-is-reported-and-keeps-its-end', async () => {
+    const store = createMemoryStore();
+    const t = '2026-11-02T10:00:00.000Z';
+    const end = '2026-12-02T00:00:00.000Z';
+    const write = (answer: string): Decision => ({
+      stage: 'write',
+      question: 'action',
+      answer,
+      probability: 1,
+    });
+    const base = { createdAt: t, updatedAt: t, validFrom: t, entities: ['freeze'] };
+    await store.upsertMany(TG, [
+      makeMemory({
+        ...base,
+        id: 'a',
+        text: 'The freeze runs until 2026-12-01.',
+        supersededBy: 'b',
+      }),
+      makeMemory({
+        ...base,
+        id: 'b',
+        text: 'The freeze, still until 2026-12-01, now blocks hotfixes.',
+        validTo: end,
+        expiredAt: t,
+        endReason: 'corrected',
+        supersedes: 'a',
+        supersededBy: 'c',
+        source: {
+          harness: 'test',
+          decisions: [
+            { stage: 'temporal', question: 'interval', answer: `turn .. ${end}`, probability: 1 },
+            write('ADD'),
+          ],
+        },
+      }),
+      makeMemory({
+        ...base,
+        id: 'c',
+        text: 'Correction: it blocks hotfixes and merges.',
+        validTo: end,
+        supersedes: 'b',
+        source: { harness: 'test', decisions: [write('CORRECT')] },
+      }),
+    ]);
+    // Another write changes the correction just before the guarded write lands.
+    const racing: MemoryStore = {
+      ...store,
+      upsertManyIfUnchanged: async (g, writes) => {
+        const c = (await store.get(g, 'c'))!;
+        await store.upsert(g, { ...c, updatedAt: '2026-11-03T00:00:00.000Z' });
+        return store.upsertManyIfUnchanged!(g, writes);
+      },
+    };
+    const r = await forgetMemory(
+      { store: racing, write: rewriteTo('The freeze now blocks hotfixes.') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The freeze now blocks hotfixes.' }]);
+    expect(r.notRewritten).toEqual([{ id: 'c', reason: 'changed' }]);
+    expect((await store.get(TG, 'b'))?.validTo).toBeNull();
+    expect((await store.get(TG, 'c'))?.validTo).toBe(end);
+  });
+
+  it('forget.a-start-a-correction-set-itself-is-carried-no-further', async () => {
+    const store = createMemoryStore();
+    const t = '2026-11-02T10:00:00.000Z';
+    const write = (answer: string): Decision => ({
+      stage: 'write',
+      question: 'action',
+      answer,
+      probability: 1,
+    });
+    const interval = (answer: string): Decision => ({
+      stage: 'temporal',
+      question: 'interval',
+      answer,
+      probability: 1,
+    });
+    const start = '2026-10-01T00:00:00.000Z';
+    const end = '2026-10-09T00:00:00.000Z';
+    const base = { createdAt: t, updatedAt: t, entities: ['release'] };
+    const corrected = { expiredAt: t, endReason: 'corrected' as const };
+    await store.upsertMany(TG, [
+      makeMemory({
+        ...base,
+        validFrom: t,
+        id: 'a',
+        text: 'The release is on 2026-10-01.',
+        supersededBy: 'b',
+      }),
+      makeMemory({
+        ...base,
+        ...corrected,
+        id: 'b',
+        text: 'The release moved from 2026-10-01 to 2026-10-08.',
+        validFrom: start,
+        validTo: end,
+        supersedes: 'a',
+        supersededBy: 'c',
+        source: { harness: 'test', decisions: [interval(`${start} .. ${end}`), write('ADD')] },
+      }),
+      // Its own text sets the same start (and restates none of a's values); its end is b's.
+      makeMemory({
+        ...base,
+        ...corrected,
+        id: 'c',
+        text: 'Correction: the beta release is out since October 1.',
+        validFrom: start,
+        validTo: end,
+        supersedes: 'b',
+        supersededBy: 'd',
+        source: { harness: 'test', decisions: [interval(`${start} .. open`), write('CORRECT')] },
+      }),
+      // Copied c's start and end.
+      makeMemory({
+        ...base,
+        id: 'd',
+        text: 'Correction: it is the stable release.',
+        validFrom: start,
+        validTo: end,
+        supersedes: 'c',
+        source: { harness: 'test', decisions: [write('CORRECT')] },
+      }),
+    ]);
+    const r = await forgetMemory(
+      { store, write: rewriteTo('The release is 2026-10-08.'), now: new Date('2026-11-18') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The release is 2026-10-08.' }]);
+    expect((await store.get(TG, 'b'))?.validTo).toBeNull();
+    // The end went down the chain; the start c set itself stays, and so does d's copy of it.
+    const c = (await store.get(TG, 'c'))!;
+    const d = (await store.get(TG, 'd'))!;
+    expect([c.validFrom, c.validTo]).toEqual([start, null]);
+    expect([d.validFrom, d.validTo]).toEqual([start, null]);
   });
 });
