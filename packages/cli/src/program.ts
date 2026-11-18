@@ -321,7 +321,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--as-of <iso>', 'recall what was true at this time')
     .option('--known-at <iso>', 'recall what was believed at this time, corrected facts included')
     .option('--history', 'recall every version of the matching facts, oldest first')
-    .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
+    .option(
+      '--include <levels>',
+      'read only these levels: self, planet, star, constellation, galaxy (comma list)',
+    )
     .option('--include-withdrawn', 'also show withdrawn judgments')
     .option('--limit <n>', 'at most this many memories, 1 to 50 (default 10)')
     .option('--speed <speed>', 'full (the default), fast (no rerank) or lexical (no model call)')
@@ -360,7 +363,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--as-of <iso>', 'explain a recall of what was true at this time')
     .option('--known-at <iso>', 'explain a recall of what was believed at this time')
     .option('--history', 'explain a recall of every version of the matching facts')
-    .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
+    .option(
+      '--include <levels>',
+      'read only these levels: self, planet, star, constellation, galaxy (comma list)',
+    )
     .option('--include-withdrawn', 'also show withdrawn judgments')
     .option('--within <path>', 'only memories at this place or below it (e.g. room:B)')
     .option('--near <x,y[,z]>', 'only memories near this point, in metres (with --radius, --map)')
@@ -890,7 +896,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .argument('<constellation>', 'name or id')
     .option('--confirm', 'every share is confirmed by a person (the default)')
-    .option('--open', 'shares are accepted without a review step')
+    .option(
+      '--open',
+      'record the open policy (no review step yet: every share is confirmed by the person sharing)',
+    )
     .option(
       '--supersede-trust <trust>',
       "member (the default) or maintainer: who may supersede someone else's memory",

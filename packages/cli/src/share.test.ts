@@ -706,13 +706,13 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     expect(yes.io.stdout).not.toContain('[y/N]');
     // The list is what the lookup saw: the question never promises it is exact.
     expect(yes.io.asked[0]).toBe(
-      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, its maintainers get a removal request)? [y/N] ',
+      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, the copy stays and your request to remove it is recorded)? [y/N] ',
     );
     expect(yes.io.stdout).toBe(
       [
         `Forgot ${ID}.`,
         'Withdrawn from oort-core.',
-        'Others contributed in checkout: a removal request went to the maintainers, and the copy stays until they decide.',
+        'Others contributed in checkout: the copy stays. Oort Cloud recorded your request to remove it, but no maintainer is shown it yet; ask a maintainer to remove it on the dashboard.',
         `Not reached: design. The copy stays; run \`oort forget ${ID} --everywhere\` again later (a Constellation you left needs a full key, or the dashboard).`,
         '',
       ].join('\n'),

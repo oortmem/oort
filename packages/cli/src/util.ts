@@ -142,7 +142,7 @@ export function noteWarning(ctx: Pick<Ctx, 'output'>, code: string, message: str
  * memories stay in its own Star.
  */
 export function agentLabel(w: Pick<Wired, 'agent'>): string {
-  if (w.agent.source === 'none') return 'no agent named (Planet only)';
+  if (w.agent.source === 'none') return 'no agent named (no Star)';
   return `as ${w.agent.id}${w.agent.home === 'star' ? ' (Star)' : ''}`;
 }
 
