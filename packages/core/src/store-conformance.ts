@@ -26,8 +26,9 @@ import {
 import type { MemoryStore, MemoryWriter, ScopeFilter } from './adapters.js';
 import { forgetMemory } from './forget.js';
 import { occurredFor } from './observe.js';
+import { factInterval } from './temporal.js';
 import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from './grant.js';
-import type { Memory, Scope } from './model.js';
+import { isCurrent, type Memory, type Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import type { Occurrence } from './event-time.js';
 import type { Feedback } from './feedback.js';
@@ -2393,27 +2394,49 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
     });
 
     /**
-     * A memory remembered with a date, and a later one that restates it. `forgetMemory` rewrites
-     * the later one (with a writer that answers `rewritten`) and must leave no date that only
-     * the forgotten text stated, in the memory or in `occurredIn`.
+     * A memory remembered with a date, and a later one that restates it, each with the event time
+     * and validity bounds the write path reads from its text. `forgetMemory` rewrites the later
+     * one (with a writer that answers `rewritten`) and must leave no date that only the forgotten
+     * text stated, in the memory or in `occurredIn`.
      */
-    const forgetRestated = async (restating: string, rewritten: string) => {
+    const forgetRestated = async (
+      restating: string,
+      rewritten: string,
+      first = 'The deploy of build 2.4 was on 2026-10-01.',
+      entities = ['deploy'],
+    ) => {
       const turn = new Date('2026-11-02T10:00:00.000Z');
-      const remembered = (id: string, text: string, extra: Partial<Memory> = {}) =>
-        makeMemory({
+      const remembered = (id: string, text: string, extra: Partial<Memory> = {}) => {
+        const bounds = factInterval(text, turn);
+        const occurred = occurredFor(text, turn);
+        const bounded = bounds.validFrom !== undefined || bounds.validTo !== undefined;
+        return makeMemory({
           id,
           text,
           stub: text.toLowerCase().replace(/\.$/, ''),
-          entities: ['deploy'],
-          validFrom: turn.toISOString(),
+          entities,
+          validFrom: bounds.validFrom ?? turn.toISOString(),
+          validTo: bounds.validTo ?? null,
           createdAt: turn.toISOString(),
           updatedAt: turn.toISOString(),
-          ...(occurredFor(text, turn) !== undefined && { occurred: occurredFor(text, turn) }),
+          ...(occurred !== undefined && { occurred }),
+          source: {
+            harness: 'test',
+            decisions: bounded
+              ? [
+                  {
+                    stage: 'temporal',
+                    question: 'interval',
+                    answer: `${bounds.validFrom ?? 'turn'} .. ${bounds.validTo ?? 'open'}`,
+                    probability: 1,
+                  },
+                ]
+              : [],
+          },
           ...extra,
         });
-      const original = remembered('original', 'The deploy of build 2.4 was on 2026-10-01.', {
-        supersededBy: 'later',
-      });
+      };
+      const original = remembered('original', first, { supersededBy: 'later' });
       const later = remembered('later', restating, { supersedes: 'original' });
       await store.upsertMany(TG, [original, later]);
       expect(await read('2026-10-01', '2026-10-02')).toContain('later');
@@ -2428,7 +2451,7 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       };
       const outcome = await forgetMemory({ store, write }, TG, 'original');
       expect(outcome.rewritten).toEqual([{ id: 'later', text: rewritten }]);
-      return { turn, later: (await store.get(TG, 'later'))! };
+      return { turn, before: later, later: (await store.get(TG, 'later'))! };
     };
 
     it('occurrences.forget-rewrite-drops-a-date-only-the-forgotten-text-stated', async () => {
@@ -2453,6 +2476,25 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       expect(later.occurred?.[0]).toEqual(day('2026-10-08'));
       expect(await read('2026-10-01', '2026-10-02')).toEqual([]);
       expect(await read('2026-10-08', '2026-10-09')).toEqual(['later']);
+    });
+
+    it('occurrences.forget-rewrite-drops-a-validity-bound-only-the-forgotten-text-set', async () => {
+      const { turn, before, later } = await forgetRestated(
+        'The release moved from 2026-10-01 to 2026-10-08.',
+        'The release is 2026-10-08.',
+        'The release is on 2026-10-01.',
+        ['release'],
+      );
+      // Written valid from 2026-10-01 to the end of 2026-10-08, read from the restating text.
+      expect([before.validFrom, before.validTo]).toEqual([
+        '2026-10-01T00:00:00.000Z',
+        '2026-10-09T00:00:00.000Z',
+      ]);
+      expect(isCurrent(before, new Date('2026-10-02T12:00:00.000Z'))).toBe(true);
+      // The new text sets no bound: valid from the turn it was written in, with no end.
+      expect([later.validFrom, later.validTo]).toEqual([turn.toISOString(), null]);
+      expect(isCurrent(later, new Date('2026-10-02T12:00:00.000Z'))).toBe(false);
+      expect(isCurrent(later, new Date('2026-11-03T00:00:00.000Z'))).toBe(true);
     });
   });
 }

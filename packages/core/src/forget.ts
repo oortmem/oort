@@ -1,6 +1,7 @@
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
 import { checkOccurrences, occurrencesOf, type Occurrence } from './event-time.js';
 import { grantWrites, type Grant } from './grant.js';
+import { factInterval, type FactInterval } from './temporal.js';
 import { purgeFeedbackFor } from './feedback.js';
 import { purgePredictionsCiting } from './judgment.js';
 import { isJudgment, type Decision, type Memory } from './model.js';
@@ -278,48 +279,150 @@ function acceptable(forgotten: Text, old: Memory, w: WrittenMemory): boolean {
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 
+/** The turn a memory's text was read against: its time and UTC offset (minutes east). */
+export interface RewriteTurn {
+  at: Date;
+  offset: number;
+}
+
+/** The bounds the write path recorded reading from the text (its last `temporal/interval`). */
+function recordedInterval(m: Memory): FactInterval | undefined {
+  const d = m.source.decisions.findLast((x) => x.stage === 'temporal' && x.question === 'interval');
+  if (d === undefined) return undefined;
+  const [from, to] = d.answer.split(' .. ');
+  return {
+    ...(from !== undefined && from !== 'turn' && { validFrom: from }),
+    ...(to !== undefined && to !== 'open' && { validTo: to }),
+  };
+}
+
+const sameOccurrences = (a: Occurrence[], b: Occurrence[] | undefined): boolean =>
+  b !== undefined &&
+  a.length === b.length &&
+  a.every(
+    (o, i) =>
+      o.from === b[i]?.from &&
+      o.to === b[i]?.to &&
+      o.precision === b[i]?.precision &&
+      o.source === b[i]?.source,
+  );
+
+/** What `factInterval` reads, or nothing when it fails. */
+function intervalOf(text: string, turn: RewriteTurn): FactInterval {
+  try {
+    return factInterval(text, turn.at, turn.offset);
+  } catch {
+    return {};
+  }
+}
+
 /**
  * The turn a memory's text was read against, recovered from the day it was said (its `mention`
- * occurrence, which the write path reads from the turn's time and UTC offset): the offset that
- * makes the day start at midnight, from UTC-10:45 to UTC+13 (UTC+14 reads as UTC-10, UTC-11 and
- * UTC-12 as UTC+13 and UTC+12: the same instants, a day apart in name), and the time `validFrom`
- * gives when it lies in that day, else the day's noon. Without a mention, `validFrom` (else
- * `createdAt`) in UTC, as the store migration reads stored text.
+ * occurrence, which the write path reads from the turn's time and UTC offset).
+ *
+ * The time is `validFrom` when it lies in that day, else `createdAt` when it does, else the day's
+ * noon. The offset is one that makes the day start at midnight. Two offsets 24 hours apart do
+ * (UTC-11:00 and UTC+13:00, for example): each one in UTC-12:00 to UTC+14:00 is tried by reading
+ * the old text again, and the one that gives back the stored `occurred` (and the bounds the write
+ * path recorded, when it recorded any) is taken. When both or neither do, the offset is taken in
+ * UTC-10:45 to UTC+13:00, so a turn in UTC-11:00, UTC-12:00, UTC+13:45 or UTC+14:00 whose text
+ * states no date that tells them apart reads a day off in name (a date on its own, a month or a
+ * weekday then lands 24 hours away, a month and day near the new year a year away).
+ *
+ * Without a mention, `createdAt` (else `validFrom`) in UTC, as the store migration reads stored
+ * text against `created_at`.
  */
-function turnOf(m: Memory, mention: Occurrence | undefined): { at: Date; offset: number } {
+export function rewriteTurnOf(m: Memory): RewriteTurn {
+  const mention = m.occurred?.find((o) => o.source === 'mention');
   const from = mention === undefined ? NaN : Date.parse(mention.from);
   const to = mention === undefined ? NaN : Date.parse(mention.to);
-  if (Number.isFinite(from) && to - from === DAY_MS) {
-    const east = ((-Math.round(from / MINUTE_MS) % 1440) + 1440) % 1440;
-    const offset = east <= 13 * 60 ? east : east - 1440;
-    const said = Date.parse(m.validFrom);
-    const at = said >= from && said < to ? said : from + DAY_MS / 2;
-    return { at: new Date(at), offset };
+  if (!Number.isFinite(from) || to - from !== DAY_MS) {
+    const made = Date.parse(m.createdAt);
+    return { at: new Date(Number.isFinite(made) ? made : Date.parse(m.validFrom)), offset: 0 };
   }
-  const said = Date.parse(m.validFrom);
-  return { at: new Date(Number.isFinite(said) ? said : Date.parse(m.createdAt)), offset: 0 };
+  const inDay = (iso: string): number | undefined => {
+    const t = Date.parse(iso);
+    return t >= from && t < to ? t : undefined;
+  };
+  const at = new Date(inDay(m.validFrom) ?? inDay(m.createdAt) ?? from + DAY_MS / 2);
+  const east = ((-Math.round(from / MINUTE_MS) % 1440) + 1440) % 1440;
+  const usual = east <= 13 * 60 ? east : east - 1440;
+  const recorded = recordedInterval(m);
+  const fits = (offset: number): boolean => {
+    try {
+      if (!sameOccurrences(occurrencesOf(m.text, at, offset), m.occurred)) return false;
+    } catch {
+      return false;
+    }
+    if (recorded === undefined) return true;
+    const read = intervalOf(m.text, { at, offset });
+    return read.validFrom === recorded.validFrom && read.validTo === recorded.validTo;
+  };
+  const matching = [east, east - 1440]
+    .filter((o) => o >= -12 * 60 && o <= 14 * 60)
+    .filter((o) => fits(o));
+  return { at, offset: matching.length === 1 ? (matching[0] as number) : usual };
 }
 
 /**
  * A rewritten memory's event time: the dates its new text states, read as the write path reads
- * them (`occurrencesOf`, against the turn it was written in, `turnOf`), then the day it was said,
- * kept as it was. A date only the old text stated is gone. Undefined when it had no event time,
- * or when, without a day it was said, the new text states no date. When the reading fails or
- * returns what a store would refuse, only the day it was said is kept, as `observe` keeps it.
+ * them (`occurrencesOf`, against the turn it was written in, `rewriteTurnOf`), then the day it
+ * was said, kept as it was. A date only the old text stated is gone. Undefined when it had no
+ * event time, or when, without a day it was said, the new text states no date. When the reading
+ * fails or returns what a store would refuse, only the day it was said is kept, as `observe` keeps
+ * it, and nothing when that day is not one a store accepts either.
  */
-export function rewrittenOccurred(m: Memory, text: string): Occurrence[] | undefined {
+export function rewrittenOccurred(
+  m: Memory,
+  text: string,
+  turn: RewriteTurn = rewriteTurnOf(m),
+): Occurrence[] | undefined {
   if (m.occurred === undefined) return undefined;
   const mention = m.occurred.find((o) => o.source === 'mention');
   const kept = mention === undefined ? [] : [{ ...mention }];
   let out: Occurrence[];
   try {
-    const { at, offset } = turnOf(m, mention);
-    const stated = occurrencesOf(text, at, offset).filter((o) => o.source !== 'mention');
+    const stated = occurrencesOf(text, turn.at, turn.offset).filter((o) => o.source !== 'mention');
     out = checkOccurrences([...stated, ...kept]);
   } catch {
-    out = kept;
+    try {
+      out = checkOccurrences(kept);
+    } catch {
+      out = [];
+    }
   }
   return out.length === 0 ? undefined : out;
+}
+
+/**
+ * A rewritten memory's validity: each bound its old text set (`factInterval`, as the write path
+ * recorded it or as it reads again) is read again from the new text against the same turn. A
+ * bound the new text does not set falls back as the write path's does: the turn's time for
+ * `validFrom`, none for `validTo`. A bound that did not come from the text (a supersede's end,
+ * a start moved before an end) is kept. `bounds` is what the new text sets.
+ */
+export function rewrittenValidity(
+  m: Memory,
+  text: string,
+  turn: RewriteTurn = rewriteTurnOf(m),
+): { validFrom: string; validTo: string | null; bounds: FactInterval } {
+  const recorded = recordedInterval(m) ?? {};
+  const old = intervalOf(m.text, turn);
+  const fromText = (v: string | null, said: string | undefined, read: string | undefined) =>
+    v !== null && (v === said || v === read);
+  const bounds = intervalOf(text, turn);
+  const toChanges = fromText(m.validTo, recorded.validTo, old.validTo);
+  const validTo = toChanges ? (bounds.validTo ?? null) : m.validTo;
+  if (!fromText(m.validFrom, recorded.validFrom, old.validFrom)) {
+    return { validFrom: m.validFrom, validTo, bounds };
+  }
+  const start = bounds.validFrom ?? turn.at.toISOString();
+  // As the write path does: a start moved back a day before an end it would pass.
+  const validFrom =
+    validTo !== null && Date.parse(validTo) <= Date.parse(start)
+      ? new Date(Date.parse(validTo) - DAY_MS).toISOString()
+      : start;
+  return { validFrom, validTo, bounds };
 }
 
 /** Runs `fn` over `items`, at most `limit` at once, results in order. */
@@ -351,6 +454,7 @@ async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>)
  *    new words, no longer, none of the values left. Re-embedded, it loses the wordings that
  *    described its old text, and its event time is read again from the new text
  *    (`rewrittenOccurred`): a date only the old text stated is gone, the day it was said stays.
+ *    So are the validity bounds its old text set (`rewrittenValidity`).
  *    One the writer leaves as it was is reported as `unchanged`.
  * 3. The chain is re-linked over the gap, and the rewrites and links land in one guarded write
  *    (`upsertManyIfUnchanged` where the store has it): a memory changed meanwhile is reported
@@ -464,10 +568,23 @@ export async function forgetMemory(
       // The old vector was computed from the old text: never kept beside the new one.
       delete next.embedding;
       if (embedding !== undefined) next.embedding = embedding;
-      // So is its event time: read again from the new text, written in the same guarded write.
-      const occurred = rewrittenOccurred(full, w.text);
+      // So are its event time and the validity bounds its text set: read again from the new
+      // text against the turn it was written in, written in the same guarded write.
+      const turn = rewriteTurnOf(full);
+      const occurred = rewrittenOccurred(full, w.text, turn);
       delete next.occurred;
       if (occurred !== undefined) next.occurred = occurred;
+      const validity = rewrittenValidity(full, w.text, turn);
+      next.validFrom = validity.validFrom;
+      next.validTo = validity.validTo;
+      if (validity.bounds.validFrom !== undefined || validity.bounds.validTo !== undefined) {
+        next.source.decisions.splice(-1, 0, {
+          stage: 'temporal',
+          question: 'interval',
+          answer: `${validity.bounds.validFrom ?? 'turn'} .. ${validity.bounds.validTo ?? 'open'}`,
+          probability: 1,
+        });
+      }
       return { m, next };
     } catch {
       return { m, reason: 'failed' as const };

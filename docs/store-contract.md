@@ -335,8 +335,10 @@ nothing), and `observe` and `oort import` store a memory without event time rath
 the reading does not hold. An `occurred` a caller sets itself is checked strictly. When
 `forgetMemory` rewrites a later memory that restated a forgotten one, it reads the new text's dates
 again (`rewrittenOccurred`, against the turn the memory was written in, recovered from its
-`mention`) and sends the new `occurred` in the same guarded write as the text, so a store that
-replaces a memory's occurrences on every write keeps no date that only the forgotten text stated.
+`mention`) and sends the new `occurred`, and the validity bounds the new text sets in place of
+those the old text set (`rewrittenValidity`), in the same guarded write as the text, so a store
+that replaces a memory's occurrences on every write keeps no date that only the forgotten text
+stated.
 
 A store that sets `occurrences: true` keeps `occurred` as written and has
 `occurredIn(grant, { from, to }, k, opts?)`: the memories in the grant with an occurrence that

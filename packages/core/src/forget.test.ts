@@ -11,6 +11,7 @@ import { forgetMemory, forgottenValues, MAX_CHAIN, restatedValues } from './forg
 import { recordJudgment, type JudgmentInput } from './judgment.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
+import type { Occurrence } from './event-time.js';
 import { occurredFor } from './observe.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
 
@@ -861,6 +862,10 @@ describe('rewrittenOccurred', () => {
       ['2026-11-02T00:30:00+02:00', 120],
       ['2026-11-02T08:00:00+05:45', 345],
       ['2026-11-02T09:00:00+13:00', 780],
+      // Each also makes the day start where a turn 24 hours away in offset does.
+      ['2026-11-02T09:00:00-11:00', -660],
+      ['2026-11-02T09:00:00+14:00', 840],
+      ['2026-11-02T09:00:00+13:45', 825],
     ] as const) {
       const text = 'The deploy was redone on 2026-10-08.';
       const { store, t, b } = await restating(
@@ -939,5 +944,34 @@ describe('rewrittenOccurred', () => {
       'a',
     );
     expect((await other.store.get(TG, 'b'))?.occurred).toBeUndefined();
+  });
+
+  it('forget.a-mention-a-store-would-refuse-leaves-no-event-time-and-the-forget-finishes', async () => {
+    const { store } = await restating(
+      '2026-11-04T10:00:00.000Z',
+      0,
+      'The deploy on 2026-10-01 used build 2.5.',
+    );
+    // A row read back with a mention that carries a field no store accepts.
+    const reading: MemoryStore = {
+      ...store,
+      get: async (g, id) => {
+        const m = await store.get(g, id);
+        if (m?.id === 'b' && m.occurred !== undefined) {
+          m.occurred = m.occurred.map((o) =>
+            o.source === 'mention' ? ({ ...o, extra: 1 } as Occurrence) : o,
+          );
+        }
+        return m;
+      },
+    };
+    const r = await forgetMemory(
+      { store: reading, write: rewriteTo('The deploy used build 2.5.') },
+      TG,
+      'a',
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+    expect(await store.get(TG, 'a')).toBeNull();
+    expect((await store.get(TG, 'b'))?.occurred).toBeUndefined();
   });
 });
