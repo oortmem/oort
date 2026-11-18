@@ -956,21 +956,204 @@ class CloudMode(unittest.TestCase):
                 call()
             self.assertEqual(e.exception.reason, "local-only")
 
-    def test_spatial_memory_is_local_only_and_nothing_is_sent(self) -> None:
-        from oortmem import OortRefusedError
-        from oortmem.types import NearQuery, Pose
+    # --- places in Oort Cloud -------------------------------------------------------------------
 
-        o = self.oort()
-        for call in (
-            lambda: o.recall("toolbox", within="room:B"),
-            lambda: o.recall("toolbox", near=NearQuery(map_id="hq", pose=Pose(x=0, y=0), radius=1)),
-            lambda: o.remember("The toolbox is on shelf B3.", place={"node_id": "shelf:B3"}),
-            lambda: o.observe(user="The toolbox is on shelf B3.", assistant="Noted.", place={"node_id": "shelf:B3"}),
-        ):
-            with self.assertRaises(OortRefusedError) as e:
-                call()
-            self.assertEqual((e.exception.reason, e.exception.fix), ("local-only", "oort cloud use --local"))
+    def _placed(self, id_: str, place: Any, **over: Any) -> Dict[str, Any]:
+        """A memory as Oort Cloud's recall sends it: the caller's own (a Planet scope) unless
+        ``over`` says otherwise."""
+        m = {
+            "id": id_,
+            "text": f"memory {id_}",
+            "type": "semantic",
+            "tier": "warm",
+            "pinned": False,
+            "validFrom": "2026-11-01T00:00:00.000Z",
+            "validTo": None,
+            "createdAt": "2026-11-01T00:00:00.000Z",
+            "updatedAt": "2026-11-01T00:00:00.000Z",
+            "expiredAt": None,
+            "endReason": None,
+            "entities": [],
+            "scope": {"orgId": "acct", "customerId": "me", "agentId": "bot"},
+            "explanation": {"fused": 0.5, "coverage": 1, "activation": 0},
+        }
+        if place is not None:
+            m["place"] = place
+        return {**m, **over}
+
+    def _recall_answer(self, memories: List[Any], **extra: Any) -> Dict[str, Any]:
+        return {"memories": memories, "timings": {}, "temporal": {"mode": "current", "inferred": False}, "degraded": [], **extra}
+
+    def test_places_are_checked_and_sent(self) -> None:
+        from oortmem.types import NearQuery, Place, Pose
+
+        added = {"outcome": "added", "memories": [{"action": "added", "id": "m1"}], "counts": {}}
+        self.rec.answers["POST /v1/observe"] = (200, added)
+        o = self.oort(project="acme")
+        # A decomposed e is sent composed (NFC), as core stores it; unknown-free, ordered fields.
+        o.remember("The wrench is in drawer 4.", place={"node_id": "site:hq/cafe\u0301/drawer:4", "map_id": "hq", "pose": {"x": 1, "y": 2.5}})
+        body = self.rec.seen[-1]["body"]
+        self.assertEqual(body["observation"]["place"], {"nodeId": "site:hq/caf\u00e9/drawer:4", "mapId": "hq", "pose": {"x": 1, "y": 2.5}})
+        self.assertRegex(body["turnRef"], r"^remember:[0-9a-f]{64}:\d{4}-\d{2}-\d{2}$")
+        # Without a place, the request is what it was before places: no turnRef, no place.
+        o.remember("The wrench is in drawer 4.")
+        self.assertEqual(set(self.rec.seen[-1]["body"]), {"project", "observation"})
+        self.assertNotIn("place", self.rec.seen[-1]["body"]["observation"])
+        o.observe(user="The charger is by the dock.", assistant="Noted.", place=Place(node_id="site:hq/dock:1", map_id="hq", pose=Pose(x=40, y=2)))
+        self.assertEqual(self.rec.seen[-1]["body"]["observation"]["place"], {"nodeId": "site:hq/dock:1", "mapId": "hq", "pose": {"x": 40, "y": 2}})
+        self.rec.answers["POST /v1/recall"] = (200, self._recall_answer([], spatial={"within": "room:B"}))
+        o.recall("toolbox", within="room:B", near=NearQuery(map_id="hq", pose=Pose(x=1, y=2), radius=3), speed="lexical")
+        sent = self.rec.seen[-1]["body"]
+        self.assertEqual((sent["within"], sent["near"]), ("room:B", {"mapId": "hq", "pose": {"x": 1, "y": 2}, "radius": 3}))
+        o.close()
+
+    def test_the_same_fact_at_another_place_has_another_turn_ref(self) -> None:
+        added = {"outcome": "added", "memories": [{"action": "added", "id": "m1"}], "counts": {}}
+        self.rec.answers["POST /v1/observe"] = (200, added)
+        with self.oort() as o:
+            o.remember("The wrench is here.", place={"nodeId": "room:A"})
+            o.remember("The wrench is here.", place={"nodeId": "room:A", "mapVersion": 3})  # recorded only
+            o.remember("The wrench is here.", place={"nodeId": "room:B"})
+        a, same, b = (s["body"]["turnRef"] for s in self.rec.seen[-3:])
+        self.assertEqual(a, same)
+        self.assertNotEqual(a, b)
+
+    def test_a_bad_place_or_filter_is_refused_before_any_request(self) -> None:
+        from oortmem import OortUsageError
+
+        secret = "site:hq/room:secret-value"
+        pose = {"x": 0, "y": 0}
+        cases = [
+            (lambda o: o.recall("q", within="room B"), "recall options: invalid field within."),
+            (lambda o: o.recall("q", within="room:B\ufe0f"), "recall options: invalid field within."),
+            (lambda o: o.recall("q", within="a/" * 16 + "a"), "recall options: invalid field within."),
+            (lambda o: o.recall("q", within="x" * 257), "recall options: invalid field within."),
+            (lambda o: o.recall("q", near={"map_id": "hq", "pose": {"x": float("nan"), "y": 0}, "radius": 1}), "recall options: invalid field near.pose.x."),
+            (lambda o: o.recall("q", near={"map_id": "hq", "pose": {"x": float("inf"), "y": 0}, "radius": 1}), "recall options: invalid field near.pose.x."),
+            (lambda o: o.recall("q", near={"map_id": "hq", "pose": {"x": 10**400, "y": 0}, "radius": 1}), "recall options: invalid field near.pose.x."),
+            (lambda o: o.recall("q", near={"map_id": "hq", "pose": pose, "radius": 0}), "recall options: invalid field near.radius."),
+            (lambda o: o.recall("q", near={"map_id": "hq", "frame": "odom", "pose": pose, "radius": 1}), "recall options: invalid field near.frame."),
+            (lambda o: o.recall("q", near={"pose": pose, "radius": 1}), "recall options: invalid field near.mapId."),
+            (lambda o: o.recall("q", near=[1, 2], limit=0), "recall options: invalid fields limit, near."),
+            (lambda o: o.remember("x", place={"nodeId": secret + "\u034f"}), "remember options: invalid field place.nodeId."),
+            (lambda o: o.remember("x", place={"pose": {"x": 1, "y": 2}}), "remember options: invalid field place.mapId."),
+            (lambda o: o.remember("x", place={"nodeId": "a", "__proto__": {"x": 1}}), "remember options: invalid field place.Proto."),
+            (lambda o: o.remember("x", place={"nodeId": "a", "mapId": "m", "pose": pose, "extent": {"radius": 1, "dx": 1}}), "remember options: invalid field place.extent."),
+            (lambda o: o.remember("x", place={"nodeId": "a", "mapVersion": 1.5}), "remember options: invalid field place.mapVersion."),
+            (lambda o: o.remember("x", place="site:hq", type="nope"), "remember options: invalid fields type, place."),
+            (lambda o: o.remember("x", place={}), "remember options: invalid field place."),
+            (lambda o: o.observe(user="a", assistant="b", place={"nodeId": "shelf:B3", "colour": "red"}), "turn: invalid field place.colour."),
+            (lambda o: o.observe(user="a", assistant="b", place={"nodeId": "a", "geo": {"lat": 91, "lon": 0}}), "turn: invalid field place.geo.lat."),
+        ]
+        with self.oort() as o:
+            for call, message in cases:
+                with self.assertRaises(OortUsageError) as e:
+                    call(o)
+                self.assertEqual((str(e.exception), e.exception.reason), (message, "invalid-argument"))
+                self.assertNotIn("secret-value", repr(e.exception))
         self.assertEqual(self.rec.seen, [])
+
+    def test_a_spatial_recall_oort_cloud_did_not_apply_is_refused(self) -> None:
+        from oortmem import OortUsageError
+        from oortmem._cloud import SPATIAL_NOT_APPLIED
+
+        own = self._placed("m1", {"nodeId": "site:hq/room:B/shelf:B3"})
+        with self.oort() as o:
+            for answer in (self._recall_answer([own]), self._recall_answer([own], spatial=None), self._recall_answer([own], spatial={"within": "room B"})):
+                self.rec.answers["POST /v1/recall"] = (200, answer)
+                for opts in ({"within": "room:B"}, {"near": {"mapId": "hq", "pose": {"x": 0, "y": 0}, "radius": 1}}):
+                    with self.assertRaises(OortUsageError) as e:
+                        o.recall("toolbox", **opts)
+                    self.assertEqual(str(e.exception), SPATIAL_NOT_APPLIED)
+            # Without a filter, no echo is needed.
+            self.rec.answers["POST /v1/recall"] = (200, self._recall_answer([own]))
+            self.assertEqual([m.id for m in o.recall("toolbox").memories], ["m1"])
+
+    def test_a_spatial_recall_keeps_only_your_memories_that_match(self) -> None:
+        b3 = {"nodeId": "site:hq/room:B/shelf:B3", "mapId": "hq", "pose": {"x": 10, "y": 0}, "extent": {"dx": 2, "dy": 0.5}}
+        lie = {"fused": 0.5, "coverage": 1, "activation": 0, "placePath": "room:Z", "distanceM": 0}
+        answer = self._recall_answer(
+            [
+                self._placed("own", b3, explanation=lie),
+                self._placed("star", b3, address={"level": "agent", "orgId": "acct", "agentId": "bot"}),
+                self._placed("outside", {"nodeId": "site:hq/room:Z", "mapId": "hq", "pose": {"x": 500, "y": 0}}),
+                self._placed("room-b2", {"nodeId": "site:hq/room:B2", "mapId": "hq", "pose": {"x": 10, "y": 0}}),
+                self._placed("hive", b3, address={"level": "hive", "orgId": "org:g1", "hiveId": "c1"}),
+                self._placed("hive-origin", b3, origin={"level": "hive", "space": "Constellation", "node": "Ops"}),
+                self._placed("galaxy", b3, address={"level": "hive", "orgId": "org:g1", "hiveId": "root"}),
+                self._placed("no-address", b3, scope=None),
+                self._placed("bad-address", b3, address="planet"),
+                self._placed("bad-place", {**b3, "pose": {"x": float("nan"), "y": 0}}),
+                self._placed("no-place", None),
+            ],
+            spatial={"within": "room:B", "near": {"mapId": "hq", "pose": {"x": 12, "y": 0}, "radius": 1.5}},
+        )
+        self.rec.answers["POST /v1/recall"] = (200, answer)
+        with self.oort() as o:
+            r = o.recall("toolbox", within="room:B", near={"mapId": "hq", "pose": {"x": 12, "y": 0}, "radius": 1.5})
+        self.assertEqual([m.id for m in r.memories], ["own", "star"])
+        m = r.memories[0]
+        # Measured here, never as sent: 12 is 1 m from the edge of a 2 m box centred on 10.
+        self.assertEqual((m.why.place_path, m.why.distance_m), ("site:hq/room:B/shelf:B3", 1))
+        self.assertEqual((m.place.node_id, m.place.map_id, m.place.pose.x, m.place.extent), ("site:hq/room:B/shelf:B3", "hq", 10, {"dx": 2, "dy": 0.5}))
+
+    def test_places_oort_cloud_sends_back_are_checked(self) -> None:
+        good = {"nodeId": "site:hq/dock:1"}
+        answer = self._recall_answer(
+            [
+                self._placed("ok", good, explanation={"fused": 0.5, "coverage": 1, "activation": 0, "placePath": "site:hq/dock:1", "distanceM": 2}),
+                self._placed("bad", {"nodeId": "dock 1", "colour": "red"}, explanation={"fused": 0.5, "coverage": 1, "activation": 0, "placePath": "a//b", "distanceM": -1}),
+                self._placed("odd", {"geo": {"lat": 1, "lon": 2}}, explanation={"fused": 0.5, "coverage": 1, "activation": 0, "distanceM": "3"}),
+            ]
+        )
+        self.rec.answers["POST /v1/recall"] = (200, answer)
+        self.rec.answers["GET /v1/memories"] = (200, {"memories": [answer["memories"][1], answer["memories"][0]]})
+        with self.oort() as o:
+            ok, bad, odd = o.recall("dock").memories
+            recent = o.recent().memories
+        self.assertEqual((ok.place.node_id, ok.why.place_path, ok.why.distance_m), ("site:hq/dock:1", "site:hq/dock:1", 2))
+        self.assertEqual((bad.place, bad.why.place_path, bad.why.distance_m), (None, None, None))
+        self.assertEqual((odd.place.geo, odd.why.distance_m), ({"lat": 1, "lon": 2}, None))
+        self.assertEqual({m.id: m.place for m in recent}["bad"], None)
+        self.assertEqual({m.id: m.place.node_id for m in recent if m.place is not None}, {"ok": "site:hq/dock:1"})
+
+    def test_the_documented_spatial_example_runs_in_cloud_mode(self) -> None:
+        import contextlib
+        import io
+        import runpy
+        from unittest import mock
+
+        b3 = {"nodeId": "site:hq/room:B/shelf:B3", "mapId": "hq", "pose": {"x": 11, "y": 1}}
+        window = {"nodeId": "site:hq/room:B", "mapId": "hq", "pose": {"x": 13, "y": 4}}
+        within = self._recall_answer([self._placed("b3", b3, text="The blue toolbox is on shelf B3.")], spatial={"within": "room:B"})
+        near_q = {"mapId": "hq", "pose": {"x": 13, "y": 3}, "radius": 1.5}
+        near = self._recall_answer([self._placed("w", window, text="The green toolbox sits under the window.")], spatial={"near": near_q})
+        self.rec.answers["POST /v1/observe"] = (200, {"outcome": "added", "memories": [{"action": "added", "id": "m1"}], "counts": {}})
+        self.rec.answers["POST /v1/recall"] = [(200, within), (200, near)]
+        with open(os.path.join(self.box.home, "cloud.json"), "w", encoding="utf-8") as f:
+            json.dump({"store": "cloud"}, f)
+        env = {**self.box.env, "OORT_API_KEY": KEY, "OORT_CLOUD_URL": self.cloud.url}
+        example = os.path.join(os.path.dirname(HERE), "..", "examples", "python", "spatial.py")
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out):
+            runpy.run_path(example, run_name="__main__")
+        self.assertEqual(out.getvalue().splitlines(), ["site:hq/room:B/shelf:B3 | The blue toolbox is on shelf B3.", "1.00 | The green toolbox sits under the window."])
+        sent = [r["body"] for r in self.rec.seen]
+        self.assertEqual(sent[0]["observation"]["place"], {"nodeId": "site:hq/room:A/shelf:A1", "mapId": "hq", "pose": {"x": 1, "y": 1}})
+        self.assertEqual((sent[-2]["within"], sent[-1]["near"]), ("room:B", near_q))
+
+    def test_a_place_oort_cloud_refuses_is_a_usage_error_with_its_message(self) -> None:
+        from oortmem import OortUsageError
+
+        limit = "near: more than 2000 placed memories lie within this radius. Use a smaller radius, or add a within."
+        self.rec.answers["POST /v1/recall"] = (400, {"error": {"code": "bad_place", "message": limit}})
+        with self.oort() as o:
+            with self.assertRaises(OortUsageError) as e:
+                o.recall("bulk", near={"mapId": "hq", "pose": {"x": 0, "y": 0}, "radius": 1})
+        self.assertEqual(
+            (str(e.exception), e.exception.reason, e.exception.status),
+            (f"Oort Cloud refused the place or the spatial filter (HTTP 400): {limit}", "invalid-argument", 400),
+        )
 
     def test_cloud_mode_refuses_local_only_options(self) -> None:
         from oortmem import Oort, OortUsageError

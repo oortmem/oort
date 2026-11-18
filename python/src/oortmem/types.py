@@ -149,8 +149,9 @@ class Pose:
 
 @dataclass(**_FROZEN)
 class Place:
-    """Where a memory is (spatial memory, 0.9.0 or newer; local mode only). ``remember``,
-    ``observe`` and ``recall(near=...)`` also take a mapping with these keys."""
+    """Where a memory is (spatial memory): 0.9.0 or newer locally, after 0.10.0 in Oort Cloud,
+    with the same rules in both modes. ``remember``, ``observe`` and ``recall(near=...)`` also
+    take a mapping with these keys."""
 
     #: A place path, root first, whole segments: ``site:hq/floor:2/room:B/shelf:B3``.
     node_id: Optional[str] = None
@@ -650,7 +651,7 @@ class Turn:
     #: At most 128 characters; deduplicated by Oort Cloud only.
     turn_ref: Optional[str] = None
     #: Where this turn happened (a ``Place`` or a mapping): the memories it writes carry it.
-    #: 0.9.0 or newer; local mode only.
+    #: 0.9.0 or newer (Oort Cloud: after 0.10.0).
     place: Optional[Any] = None
 
 

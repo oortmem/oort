@@ -84,9 +84,10 @@ Python today and for any other language. See [cli-and-python.md](cli-and-python.
   `judge.getPrediction`, `judge.forgetPrediction`, `judge.evalLive`) and the training export in
   Oort Cloud. Cloud mode refuses them (`local-only`). `judge.record`, `judge.apply` and
   `judge.list` work in both modes from 0.11.0.
-- Places and judgments in the Python client's cloud mode. The TypeScript SDK, the CLI and the MCP
-  server send `place`, `near` and `within` to Oort Cloud from 0.11.0; the Python client still
-  refuses them in cloud mode (`local-only`), and keeps judgments local only.
+- Judgments in the Python client's cloud mode: it keeps them local only (`local-only`). The
+  TypeScript SDK, the CLI and the MCP server send `place`, `near` and `within` to Oort Cloud from
+  0.11.0, and the Python client does from the next release (in 0.11.0 its cloud mode refuses them
+  with `local-only`).
 - `store.vectorIndex: 'auto'` choosing the RaBitQ index. `rabitq` (0.10.0 or newer) is opt-in;
   `auto` never builds it. Its native engine ships for macOS arm64 and Linux x64 and arm64 (glibc);
   anywhere else the same index runs in TypeScript.

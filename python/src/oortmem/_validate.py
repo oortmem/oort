@@ -2,9 +2,9 @@
 
 Local mode sends arguments to ``oort serve``, whose TypeScript SDK checks them (one set of rules,
 one set of messages). Cloud mode has no TypeScript in the path, so these are the SDK's strict
-schemas (``validate.ts``) and temporal rules (``context.ts`` ``viewOf``), ported: an invalid
-argument is an ``OortUsageError`` (``invalid-argument``) before any request, naming the field,
-never its value.
+schemas (``validate.ts``) and temporal rules (``context.ts`` ``viewOf``), ported, with places and
+spatial filters checked by core's rules (``_place.py``): an invalid argument is an
+``OortUsageError`` (``invalid-argument``) before any request, naming the field, never its value.
 """
 
 from __future__ import annotations
@@ -12,8 +12,9 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ._place import PlaceError, check_near, check_place, check_place_path, fields_of
 from .errors import OortUsageError
 from .types import Turn, camel, to_wire
 
@@ -142,7 +143,8 @@ def turn_wire(turn: Any) -> Dict[str, Any]:
 
 def place_wire(v: Any) -> Any:
     """A ``Place`` or ``NearQuery`` (or a mapping, snake_case or camelCase keys) as its wire
-    object. The values are checked where the rules live: ``oort serve`` in local mode."""
+    object. The values are checked by core's rules: by ``oort serve`` in local mode, and here
+    (``_place.py``) before any request in cloud mode."""
     if dataclasses.is_dataclass(v) and not isinstance(v, type):
         return to_wire(v)
     if isinstance(v, Mapping):
@@ -160,7 +162,19 @@ def check_query(q: Any) -> str:
     return q
 
 
-def check_recall(o: Mapping[str, Any]) -> None:
+def _place_rule(fn: Callable[[Any], Dict[str, Any]], v: Any, key: str, bad_fields: List[str]) -> Any:
+    """One of core's place checks, its refusal added to ``bad_fields`` under ``key`` as the SDK's
+    ``corePlaceCheck`` adds it (``near.pose.x``); the checked value, or ``None``."""
+    try:
+        return fn(v)
+    except PlaceError as e:
+        bad_fields.extend(fields_of(e, key))
+        return None
+
+
+def check_recall(o: Mapping[str, Any]) -> Dict[str, Any]:
+    """Checks recall options; returns the spatial filter (``within``, ``near``) as core's rules
+    read it, empty when there is none."""
     bad_fields: List[str] = []
     limit = o.get("limit")
     if limit is not None and not (is_int(limit) and 1 <= limit <= LIMITS["recall_limit"]):
@@ -183,8 +197,14 @@ def check_recall(o: Mapping[str, Any]) -> None:
     sp = o.get("speed")
     if sp is not None and sp not in ("full", "fast", "lexical"):
         bad_fields.append("speed")
+    spatial: Dict[str, Any] = {}
+    if o.get("within") is not None:
+        spatial["within"] = _place_rule(lambda v: check_place_path(v, "within"), o["within"], "within", bad_fields)
+    if o.get("near") is not None:
+        spatial["near"] = _place_rule(check_near, o["near"], "near", bad_fields)
     if bad_fields:
         raise bad("recall options", bad_fields)
+    return spatial
 
 
 def view_of(o: Mapping[str, Any]) -> Dict[str, str]:
@@ -211,10 +231,11 @@ def view_of(o: Mapping[str, Any]) -> Dict[str, str]:
     return {"mode": mode}
 
 
-_TURN_KEYS = ("user", "assistant", "tools", "at", "sessionId", "turnRef")
+_TURN_KEYS = ("user", "assistant", "tools", "at", "sessionId", "turnRef", "place")
 
 
-def check_turn(t: Mapping[str, Any]) -> None:
+def check_turn(t: Mapping[str, Any]) -> Dict[str, Any]:
+    """Checks a wire turn; returns it with its place as core's rules read it."""
     unknown = [k for k in t if k not in _TURN_KEYS]
     if unknown:
         raise bad("turn", unknown, unknown=True)
@@ -233,11 +254,15 @@ def check_turn(t: Mapping[str, Any]) -> None:
     ref = t.get("turnRef")
     if ref is not None and not (isinstance(ref, str) and 1 <= js_len(ref) <= LIMITS["turn_ref"]):
         fields.append("turnRef")
+    out = dict(t)
+    if t.get("place") is not None:
+        out["place"] = _place_rule(check_place, t["place"], "place", fields)
     if fields:
         raise bad("turn", fields)
     size = utf8(t["user"]) + utf8(t["assistant"]) + sum(utf8(x) for x in (tools or []))
     if size > LIMITS["turn_bytes"]:
         raise bad("turn", ["user"])
+    return out
 
 
 def check_facts(facts: Any) -> List[str]:
@@ -256,9 +281,16 @@ def check_facts(facts: Any) -> List[str]:
     return list(lst)
 
 
-def check_type(t: Any) -> None:
+def check_remember(t: Any, place: Any) -> Optional[Dict[str, Any]]:
+    """Checks remember options (``type``, ``place`` as a wire object); returns the place as core's
+    rules read it, or ``None`` without one."""
+    fields: List[str] = []
     if t is not None and t not in ("semantic", "episodic", "procedural", "preference"):
-        raise bad("remember options", ["type"])
+        fields.append("type")
+    checked = None if place is None else _place_rule(check_place, place, "place", fields)
+    if fields:
+        raise bad("remember options", fields)
+    return checked
 
 
 def check_id(i: Any) -> str:

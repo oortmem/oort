@@ -5,7 +5,20 @@ import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { VERSION, linkProject, resolveProject, scrub, setAgentStar } from '@oortmem/core';
+import {
+  VERSION,
+  checkNear,
+  checkPlace,
+  checkPlacePath,
+  linkProject,
+  matchesSpatial,
+  placeDistance,
+  resolveProject,
+  scrub,
+  setAgentStar,
+  type MemoryType,
+  type SpatialFilter,
+} from '@oortmem/core';
 import { tmpdir } from '../../test/helpers.js';
 import {
   CASES,
@@ -30,6 +43,7 @@ import {
   endUsersAllowed,
 } from '../cloud.js';
 import { parseRetryAfter } from '../relay.js';
+import { cloudRememberRequest, rememberTurnRef } from '../remember.js';
 import { startDaemon, type Daemon } from '../serve-daemon.js';
 import { errorBody, statusFor } from '../serve-http.js';
 import { wire } from '../wire.js';
@@ -58,7 +72,7 @@ import { formatForPrompt } from './views.js';
  * deterministic models (local) and the shared fake Oort Cloud over loopback HTTP (cloud). The
  * fakes live here, in TypeScript, so both SDKs meet exactly the same ones; nothing leaves the
  * machine. Also the golden vectors both SDKs check: `formatForPrompt`, the cloud error mapping,
- * the daemon's error envelope, and project ids.
+ * the daemon's error envelope, project ids, and places (core's checks and a remember's turn ref).
  */
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -266,18 +280,6 @@ const PYTHON_GAPS: Record<string, string> = {
       'cloud-expert-role-is-refused',
       'cloud-a-key-records-and-a-person-decides',
     ].map((id) => [`cloud judge.${id}`, 'judgments in cloud mode are TypeScript only for now']),
-  ),
-  // Places in Oort Cloud reach the TypeScript SDK first; the Python client's cloud mode still
-  // refuses them (local-only) before anything is sent.
-  ...Object.fromEntries(
-    [
-      'within-keeps-whole-segments-and-explains-the-path',
-      'near-keeps-the-radius-on-one-map-with-the-distance',
-      'remember-and-observe-carry-a-place',
-      'a-bad-place-or-filter-is-a-usage-error',
-      'near-over-the-oort-cloud-limit-is-a-usage-error',
-      'a-place-oort-cloud-refuses-is-a-usage-error',
-    ].map((id) => [`cloud spatial.${id}`, 'places in cloud mode are TypeScript only for now']),
   ),
 };
 
@@ -623,6 +625,235 @@ describe('golden vectors (contract/sdk/vectors)', () => {
         return { ...i, expect: shapeOf(e) };
       }),
     );
+  });
+
+  it("places: core's checks, distances and a remember's turn ref, as both SDKs apply them", () => {
+    const outcome = (fn: () => unknown): { output: unknown } | { error: string } => {
+      try {
+        return { output: fn() };
+      } catch (e) {
+        if (!(e instanceof RangeError)) throw e;
+        return { error: e.message };
+      }
+    };
+    const paths: unknown[] = [
+      'site:hq/room:B/shelf:B3',
+      'room:B',
+      'room B',
+      'room:B\ufe0f',
+      'site:hq/room:B\u034f',
+      'cafe\u0301',
+      '\u00e9t\u00e9/\u65e5\u672c/\u6771\u4eac',
+      '\u062e\u0627\u0646\u0647\u200c\u06cc',
+      '\u0627\u064b\u200c\u0628',
+      'a\u200cb',
+      '\u0915\u094d\u200d\u0937',
+      '\u0d28\u0d4d\u200d',
+      'room:B\u200d',
+      'x\u00ad',
+      'x\u2060',
+      '\u1820\u180b',
+      '\u{e0041}x',
+      '\u{1d400}',
+      '\u{1f600}',
+      '\u0661\u0662',
+      '-start',
+      'a\tb',
+      'a'.repeat(64),
+      'a'.repeat(65),
+      `${'a/'.repeat(15)}a`,
+      `${'a/'.repeat(16)}a`,
+      'x'.repeat(256),
+      'x'.repeat(257),
+      '',
+      'a//b',
+      '/a',
+      12,
+      null,
+    ];
+    const places: unknown[] = [
+      {
+        sigma: 0.1,
+        nodeId: 'site:hq/room:B',
+        mapId: 'hq',
+        mapVersion: 3,
+        frame: 'base_link',
+        pose: { x: 1.5, y: -2, z: 0.25, yaw: 3.14 },
+        extent: { dx: 2, dy: 0.5, dz: 1 },
+        geo: { lat: 59.3, lon: 18.07, alt: 12 },
+      },
+      { nodeId: 'cafe\u0301' },
+      { pose: { x: 1, y: 2 } },
+      { mapId: 'm', pose: { x: 1, y: 2 }, extent: { radius: 2 } },
+      { mapId: 'm', pose: { x: 1, y: 2 }, extent: { radius: 2, dx: 1 } },
+      { mapId: 'm', pose: { x: 1, y: 2 }, extent: { dx: 1, dy: 1, dz: 1 } },
+      { mapId: 'm', pose: { x: 1, y: 2 }, extent: { dx: 0, dy: 1 } },
+      { nodeId: 'a', extent: { radius: 1 } },
+      { nodeId: 'a', mapVersion: -1 },
+      { nodeId: 'a', mapVersion: 1.5 },
+      { nodeId: 'a', mapVersion: 2 ** 53 },
+      { nodeId: 'a', frame: 'ODOM' },
+      { nodeId: 'a', frame: 'a b' },
+      { nodeId: 'a', mapId: 'x'.repeat(129) },
+      { mapId: 'm', pose: { x: 1e7, y: -1e7 } },
+      { mapId: 'm', pose: { x: 10000001, y: 0 } },
+      { mapId: 'm', pose: { x: '1', y: 0 } },
+      { mapId: 'm', pose: { x: 0, y: 0, yaw: 1001 } },
+      { mapId: 'm', pose: { x: 0, y: 0, w: 1 } },
+      { mapId: 'm', pose: null },
+      { geo: { lat: 91, lon: 0 } },
+      { geo: { lat: 0, lon: 0, height: 1 } },
+      { geo: { lat: 0, lon: -180, alt: -1e7 } },
+      { nodeId: 'a', sigma: -1 },
+      { nodeId: 'a', colour: 'red' },
+      { nodeId: 'a', 'a b\u{1f600}': 1 },
+      {},
+      [],
+      'site:hq',
+      null,
+    ];
+    const nears: unknown[] = [
+      { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 1 },
+      { frame: 'base', radius: 2.5, pose: { z: 1, y: 0, x: 0 }, mapId: 'hq' },
+      { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 0 },
+      { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 1e7 },
+      { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 10000001 },
+      { pose: { x: 0, y: 0 }, radius: 1 },
+      { mapId: 'hq', pose: { x: 0, y: 0, yaw: 1 }, radius: 1 },
+      { mapId: 'hq', frame: 'odom', pose: { x: 0, y: 0 }, radius: 1 },
+      { mapId: 'hq', radius: 1 },
+      { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 1, colour: 'red' },
+    ];
+    const b3 = { nodeId: 'site:hq/room:B/shelf:B3', mapId: 'hq', pose: { x: 10, y: 0, z: 1.2 } };
+    const filters: { place: unknown; filter: SpatialFilter }[] = [
+      { place: b3, filter: { near: { mapId: 'hq', pose: { x: 12, y: 0 }, radius: 3 } } },
+      { place: b3, filter: { near: { mapId: 'hq', pose: { x: 12, y: 0, z: 0 }, radius: 3 } } },
+      {
+        place: { ...b3, extent: { dx: 2, dy: 0.5 } },
+        filter: { near: { mapId: 'hq', pose: { x: 12, y: 3 }, radius: 3 } },
+      },
+      {
+        place: { ...b3, extent: { dx: 2, dy: 0.5, dz: 0.4 } },
+        filter: { near: { mapId: 'hq', pose: { x: 10, y: 0, z: 5 }, radius: 3 } },
+      },
+      {
+        place: { ...b3, extent: { radius: 1.5 } },
+        filter: { near: { mapId: 'hq', pose: { x: 13, y: 4, z: 1.2 }, radius: 4 } },
+      },
+      {
+        place: { ...b3, frame: 'base' },
+        filter: { near: { mapId: 'hq', pose: { x: 10, y: 0 }, radius: 1 } },
+      },
+      { place: b3, filter: { near: { mapId: 'lab', pose: { x: 10, y: 0 }, radius: 1 } } },
+      {
+        place: { nodeId: 'site:hq' },
+        filter: { near: { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 1 } },
+      },
+      { place: b3, filter: { within: 'room:B' } },
+      { place: b3, filter: { within: 'room:B/shelf:B3' } },
+      { place: b3, filter: { within: 'room:B3' } },
+      { place: { ...b3, nodeId: 'site:hq/room:B2' }, filter: { within: 'room:B' } },
+      {
+        place: b3,
+        filter: { within: 'room:B', near: { mapId: 'hq', pose: { x: 100, y: 0 }, radius: 1 } },
+      },
+      { place: undefined, filter: { within: 'room:B' } },
+    ];
+    const pw = 'Tr0ub4dor' + '-and-3';
+    const refs: {
+      fact: string;
+      type: MemoryType | null;
+      project: string | null;
+      place: unknown;
+    }[] = [
+      { fact: 'The torque wrench is in drawer 4.', type: null, project: null, place: null },
+      {
+        fact: 'The torque wrench is in drawer 4.',
+        type: 'episodic',
+        project: 'cfg:acme',
+        place: null,
+      },
+      {
+        fact: 'The torque wrench is in drawer 4.',
+        type: null,
+        project: null,
+        place: { nodeId: 'site:hq/room:B/drawer:4' },
+      },
+      {
+        fact: 'The torque wrench is in drawer 4.',
+        type: 'semantic',
+        project: 'cfg:acme',
+        place: { nodeId: 'cafe\u0301' },
+      },
+      {
+        fact: 'Quotes " and \\ and a\nnew line, caf\u00e9 \u{1f600}',
+        type: null,
+        project: null,
+        place: {
+          nodeId: 'a',
+          mapId: 'hq',
+          mapVersion: 7,
+          frame: 'base',
+          pose: { x: 0.1, y: 1e-7, z: 1.5e-6, yaw: 1 },
+          extent: { radius: 2 },
+          sigma: 0.2,
+        },
+      },
+      {
+        fact: 'Same pose, other details.',
+        type: null,
+        project: null,
+        place: { mapId: 'hq', pose: { x: 123456.789, y: -0.5 } },
+      },
+      {
+        fact: 'Outdoors.',
+        type: null,
+        project: null,
+        place: { geo: { lat: 59.3293, lon: 18.0686, alt: 28 } },
+      },
+      {
+        fact: 'Outdoors, with a path.',
+        type: null,
+        project: null,
+        place: { nodeId: 'park', geo: { lat: 1, lon: 2 } },
+      },
+      {
+        fact: `The old db password: ["${pw}", "x"] is retired.`,
+        type: null,
+        project: null,
+        place: { nodeId: 'srv:db' },
+      },
+    ];
+    const at = '2026-11-05T23:59:59.000Z';
+    vector('places.json', {
+      paths: paths.map((input) => ({ input, ...outcome(() => checkPlacePath(input, 'within')) })),
+      places: places.map((input) => ({ input, ...outcome(() => checkPlace(input)) })),
+      nears: nears.map((input) => ({ input, ...outcome(() => checkNear(input)) })),
+      filters: filters.map(({ place, filter }) => {
+        const p = place === undefined ? undefined : checkPlace(place);
+        return {
+          place: p ?? null,
+          filter,
+          matches: matchesSpatial({ place: p }, filter),
+          distanceM: filter.near === undefined ? null : (placeDistance(p, filter.near) ?? null),
+        };
+      }),
+      turnRefs: refs.map((r) => {
+        const place = r.place === null ? undefined : checkPlace(r.place);
+        const req = cloudRememberRequest(r.fact, {
+          type: r.type ?? undefined,
+          at,
+          ...(r.project !== null && { project: { project: r.project } }),
+          ...(place !== undefined && { place }),
+        });
+        return {
+          ...r,
+          at,
+          turnRef: rememberTurnRef(r.fact, r.type ?? undefined, r.project ?? undefined, at, place),
+          request: req.dropped ? null : req.body.turnRef,
+        };
+      }),
+    });
   });
 
   it('per-user memory (CON-132): the header, and which whoami answers allow it', () => {
