@@ -37,7 +37,7 @@ interface ForgetData {
   everywhere: boolean;
   /** `--everywhere`: the copies only you contributed to, withdrawn. */
   withdrawnFrom: string[];
-  /** `--everywhere`: others contributed, so a removal request went to the maintainers. */
+  /** `--everywhere`: others contributed, so the copy stays and your request to remove it is recorded. */
   removalRequested: string[];
   /** `--everywhere`: not reached; the copy stays. */
   unreachable: string[];
@@ -250,8 +250,8 @@ const withTexts = async (
  * Oort Cloud from before CON-156 answers without the lists: then the CLI finds the later
  * memories that restate it itself and names them, as before. In Oort Cloud a copy shared to a
  * Constellation is the team's memory and stays: the question (and `--json`'s warnings) say where,
- * and `--everywhere` withdraws the copies only you contributed to, filing a removal request with
- * the maintainers where others contributed (CON-67).
+ * and `--everywhere` withdraws the copies only you contributed to. Where others contributed, the
+ * copy stays and Oort Cloud records your request to remove it; no maintainer is shown it yet.
  */
 export async function forgetCommand(
   id: string,
@@ -424,7 +424,7 @@ async function forgetEverywhere(
   const where =
     live.length === 0
       ? ' (no shared copies found; any you made will be withdrawn)'
-      : ` and withdraw your copies from ${copiesLabel(live)} (${others}; where others contributed, its maintainers get a removal request)`;
+      : ` and withdraw your copies from ${copiesLabel(live)} (${others}; where others contributed, the copy stays and your request to remove it is recorded)`;
   const ok = await confirm(
     ctx.io,
     t.memory === null
@@ -448,7 +448,7 @@ async function forgetEverywhere(
   ctx.io.out(t.memory === null ? `${t.id} was already forgotten.\n` : `Forgot ${t.id}.\n`);
   if (r.withdrawn.length > 0) ctx.io.out(`Withdrawn from ${copiesLabel(r.withdrawn)}.\n`);
   if (r.requested.length > 0) {
-    const msg = `Others contributed in ${copiesLabel(r.requested)}: a removal request went to the maintainers, and the copy stays until they decide.`;
+    const msg = `Others contributed in ${copiesLabel(r.requested)}: the copy stays. Oort Cloud recorded your request to remove it, but no maintainer is shown it yet; ask a maintainer to remove it on the dashboard.`;
     ctx.io.out(`${msg}\n`);
     noteWarning(ctx, 'removal-requested', msg);
   }

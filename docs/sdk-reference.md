@@ -754,8 +754,8 @@ export interface ForgetResult {
   /** Cloud `everywhere`: the Constellations (ids) whose copy only you contributed to, withdrawn. */
   withdrawn?: string[];
   /**
-   * Cloud `everywhere`: the Constellations (ids) where others contributed too. Their maintainers
-   * got a removal request, and the copy stays until they decide.
+   * Cloud `everywhere`: the Constellations (ids) where others contributed too. The copy stays.
+   * Oort Cloud recorded your request to remove it, but no maintainer is shown it yet.
    */
   requested?: string[];
   /**

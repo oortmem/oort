@@ -585,7 +585,7 @@ export function rewritesOf(body: unknown): CloudRewrites | null {
 export interface CloudForgetEverywhere {
   /** The copies only you contributed to: withdrawn. */
   withdrawn: string[];
-  /** Others contributed: a removal request went to the maintainers, and the copy stays. */
+  /** Others contributed: the copy stays, and your request to remove it is recorded (no maintainer is shown it yet). */
   requested: string[];
   /** Not reached (try again later; a Constellation you left needs a full key). The copy stays. */
   unreachable: string[];
@@ -702,7 +702,7 @@ export interface CloudClient {
   shares(id: string): Promise<CloudShareEdge[]>;
   /**
    * Forgets a memory (already forgotten is fine) and withdraws the copies only this person
-   * contributed to; elsewhere it files a removal request with the maintainers.
+   * contributed to; elsewhere the copy stays and your request to remove it is recorded.
    */
   forgetEverywhere(id: string): Promise<CloudForgetEverywhere>;
   /** `turnRef` makes a retry safe: the API saves each turn once and answers `duplicate`. */

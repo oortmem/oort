@@ -390,7 +390,7 @@ export interface FakeHive {
   withdrawn: { constellation: string; sourceId: string; id: string; at: string }[];
   /**
    * CON-67: what `forget --everywhere` gets from a Constellation (default `withdrawn`):
-   * `requested` (others contributed: a removal request, the copy stays) or `unreachable`.
+   * `requested` (others contributed: the copy stays, the request is recorded) or `unreachable`.
    */
   withdrawOutcome: Map<string, 'withdrawn' | 'requested' | 'unreachable'>;
   /** CON-67: Constellations you left, by id, with their names (the shares route still names them). */

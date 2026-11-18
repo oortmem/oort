@@ -309,7 +309,7 @@ class ForgetResult:
     not_rewritten_unnamed: Optional[int] = None
     #: Cloud ``everywhere``: Constellations whose copy only you contributed to, withdrawn.
     withdrawn: Optional[List[str]] = None
-    #: Cloud ``everywhere``: Constellations where others contributed too (a removal request).
+    #: Cloud ``everywhere``: Constellations where others contributed too (the copy stays; your request to remove it is recorded).
     requested: Optional[List[str]] = None
     #: Cloud ``everywhere``: Constellations not reached; call again later with the full id.
     unreachable: Optional[List[str]] = None

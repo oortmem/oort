@@ -162,8 +162,8 @@ result leaves them out.
 
 **`forget` with `everywhere`** (Oort Cloud) does what `oort forget --everywhere` does: it forgets
 the memory, then withdraws your copies in Constellations. The result lists Constellation ids:
-`withdrawn` (you were the only contributor), `requested` (others contributed, so the maintainers
-got a removal request and the copy stays) and `unreachable` (not reached; the copy stays, so call
+`withdrawn` (you were the only contributor), `requested` (others contributed, so the copy stays and
+Oort Cloud records your request to remove it; no maintainer is shown it yet) and `unreachable` (not reached; the copy stays, so call
 it again later with the full id, which still finds the copies of a memory already forgotten).
 Outside the hive beta it is refused (`refused`, reason `hive-not-enabled`) before anything is
 forgotten; in local mode it is `cloud-only`.

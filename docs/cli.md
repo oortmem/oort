@@ -1554,8 +1554,8 @@ plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
 `claude-code`): your Planet and that agent's own Star.
 
 `--include` takes a comma list of levels: `self` (where the agent's new
-memories go), `planet`, `star` (the agent's own), `constellation` and
-`galaxy`. Asking for a level the agent cannot read exits 2 with
+memories go), `planet`, `star` (the agent's own), `constellation` (the
+Constellations you belong to) and `galaxy`. Asking for a level the agent cannot read exits 2 with
 `scope_denied` rather than an empty answer. Locally there are no shared
 levels. In cloud mode a recall reads your Planet and, for accounts in the
 Constellations beta, the Constellations you belong to (see
@@ -2932,8 +2932,9 @@ same goes in a `still-shared` warning, and `data.stillShared` lists each Constel
 one of three things:
 
 - **Withdrawn:** you were its only contributor, so the copy is removed.
-- **Removal requested:** others contributed (they confirmed or co-wrote it), so the copy stays
-  and its maintainers get a request to remove it.
+- **Removal requested:** others contributed (they confirmed or co-wrote it), so the copy stays.
+  Oort Cloud records your request to remove it, but no maintainer is shown it yet; ask a maintainer
+  to remove it on the dashboard.
 - **Not reached:** the Constellation did not answer, or you left it and this is a narrowed key
   (reaching a Constellation you left needs a full key or the dashboard). The copy stays; run the
   same command again later. This is a partial success: the command exits 3, and the `--json`
@@ -2942,10 +2943,10 @@ one of three things:
 
 ```text
 $ oort forget 1b2c3d4e --everywhere
-Forget 1b2c3d4e "We deploy with wrangler" and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, its maintainers get a removal request)? [y/N] y
+Forget 1b2c3d4e "We deploy with wrangler" and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, the copy stays and your request to remove it is recorded)? [y/N] y
 Forgot 1b2c3d4e-….
 Withdrawn from oort-core.
-Others contributed in checkout: a removal request went to the maintainers, and the copy stays until they decide.
+Others contributed in checkout: the copy stays. Oort Cloud recorded your request to remove it, but no maintainer is shown it yet; ask a maintainer to remove it on the dashboard.
 Not reached: design. The copy stays; run `oort forget 1b2c3d4e-… --everywhere` again later (a Constellation you left needs a full key, or the dashboard).
 ```
 
@@ -3064,6 +3065,9 @@ survive an erasure: when someone deletes their account, a memory they wrote or c
 only while at least `n` remaining members support it, and is deleted below that. It applies only to
 the erased person's own memories, never to one they only confirmed. `--min-support` can be given
 alone or with the other flags; `--json` returns `minSupport` with the policy.
+
+`policy --open` records the open policy. Neither policy has a review step yet: every share is
+confirmed by the person sharing, whichever is set.
 
 ### When teammates disagree
 
