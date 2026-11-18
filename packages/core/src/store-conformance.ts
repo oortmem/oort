@@ -28,7 +28,7 @@ import { forgetMemory } from './forget.js';
 import { occurredFor } from './observe.js';
 import { factInterval, startBefore } from './temporal.js';
 import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from './grant.js';
-import { isCurrent, type Memory, type Scope } from './model.js';
+import { isCurrent, type Decision, type Memory, type Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import type { Occurrence } from './event-time.js';
 import type { Feedback } from './feedback.js';
@@ -2397,20 +2397,38 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
      * A memory remembered with a date, and a later one that restates it, each with the event time
      * and validity bounds the write path reads from its text. `forgetMemory` rewrites the later
      * one (with a writer that answers `rewritten`) and must leave no date that only the forgotten
-     * text stated, in the memory or in `occurredIn`.
+     * text stated, in the memory or in `occurredIn`. `how.refinedFrom` writes the later one with
+     * that text first and refines it to `restating`; `how.newer` writes a newer memory that
+     * supersedes it, or with `how.corrects` corrects it, as `observe` writes each.
      */
     const forgetRestated = async (
       restating: string,
       rewritten: string,
       first = 'The deploy of build 2.4 was on 2026-10-01.',
       entities = ['deploy'],
-      newer?: string,
+      how: { newer?: string; corrects?: boolean; refinedFrom?: string } = {},
     ) => {
       const turn = new Date('2026-11-02T10:00:00.000Z');
+      const wrote = (answer: string): Decision => ({
+        stage: 'write',
+        question: 'action',
+        answer,
+        probability: 1,
+      });
+      const intervalRead = (b: { validFrom?: string; validTo?: string }): Decision[] =>
+        b.validFrom === undefined && b.validTo === undefined
+          ? []
+          : [
+              {
+                stage: 'temporal',
+                question: 'interval',
+                answer: `${b.validFrom ?? 'turn'} .. ${b.validTo ?? 'open'}`,
+                probability: 1,
+              },
+            ];
       const remembered = (id: string, text: string, extra: Partial<Memory> = {}) => {
         const bounds = factInterval(text, turn);
         const occurred = occurredFor(text, turn);
-        const bounded = bounds.validFrom !== undefined || bounds.validTo !== undefined;
         return makeMemory({
           id,
           text,
@@ -2421,28 +2439,56 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
           createdAt: turn.toISOString(),
           updatedAt: turn.toISOString(),
           ...(occurred !== undefined && { occurred }),
-          source: {
-            harness: 'test',
-            decisions: bounded
-              ? [
-                  {
-                    stage: 'temporal',
-                    question: 'interval',
-                    answer: `${bounds.validFrom ?? 'turn'} .. ${bounds.validTo ?? 'open'}`,
-                    probability: 1,
-                  },
-                ]
-              : [],
-          },
+          source: { harness: 'test', decisions: [...intervalRead(bounds), wrote('ADD')] },
           ...extra,
         });
       };
       const original = remembered('original', first, { supersededBy: 'later' });
-      let later = remembered('later', restating, { supersedes: 'original' });
+      let later = remembered('later', how.refinedFrom ?? restating, { supersedes: 'original' });
+      if (how.refinedFrom !== undefined) {
+        // Refined in place: bounds its new text sets, else the earlier ones carried over.
+        const b = factInterval(restating, turn);
+        const to = b.validTo ?? later.validTo;
+        const occurred = occurredFor(restating, turn);
+        later = {
+          ...later,
+          text: restating,
+          stub: restating.toLowerCase().replace(/\.$/, ''),
+          validFrom: startBefore(b.validFrom ?? later.validFrom, to),
+          validTo: to,
+          ...(occurred !== undefined && { occurred }),
+          source: {
+            ...later.source,
+            decisions: [
+              ...later.source.decisions,
+              ...intervalRead(b),
+              { stage: 'refine', question: 'previous-text', answer: later.text, probability: 1 },
+              wrote('REFINE'),
+            ],
+          },
+        };
+      }
       const writes = [original, later];
-      if (newer !== undefined) {
+      if (how.newer !== undefined && how.corrects === true) {
+        // A correction keeps bounds its own text sets, else takes the prior's; the prior keeps
+        // its validity and ends by reason.
+        const b = factInterval(how.newer, turn);
+        const to = b.validTo ?? later.validTo;
+        const n = remembered('newer', how.newer, {
+          supersedes: 'later',
+          validFrom: startBefore(b.validFrom ?? later.validFrom, to),
+          validTo: to,
+        });
+        later = {
+          ...later,
+          expiredAt: turn.toISOString(),
+          endReason: 'corrected',
+          supersededBy: 'newer',
+        };
+        writes.splice(1, 1, later, n);
+      } else if (how.newer !== undefined) {
         // A newer fact supersedes it, closing it where the newer one starts, as observe does.
-        const n = remembered('newer', newer, { supersedes: 'later' });
+        const n = remembered('newer', how.newer, { supersedes: 'later' });
         later = {
           ...later,
           validTo:
@@ -2464,7 +2510,12 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       };
       const outcome = await forgetMemory({ store, write }, TG, 'original');
       expect(outcome.rewritten).toEqual([{ id: 'later', text: rewritten }]);
-      return { turn, before: later, later: (await store.get(TG, 'later'))! };
+      return {
+        turn,
+        before: later,
+        later: (await store.get(TG, 'later'))!,
+        newer: await store.get(TG, 'newer'),
+      };
     };
 
     it('occurrences.forget-rewrite-drops-a-date-only-the-forgotten-text-stated', async () => {
@@ -2532,7 +2583,7 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
         'The freeze now also blocks hotfixes.',
         'The freeze runs until 2026-11-30.',
         ['freeze'],
-        'Starting 2026-12-01 the freeze is lifted.',
+        { newer: 'Starting 2026-12-01 the freeze is lifted.' },
       );
       // Its text's end and the newer fact's start are the same midnight.
       expect(before.validTo).toBe('2026-12-01T00:00:00.000Z');
@@ -2552,6 +2603,39 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       );
       expect(later.validTo).toBe('2026-10-16T00:00:00.000Z');
       expect(Date.parse(later.validFrom)).toBeLessThan(Date.parse(later.validTo!));
+    });
+
+    it('occurrences.forget-rewrite-gives-its-new-end-to-a-correction-that-copied-it', async () => {
+      const { before, later, newer } = await forgetRestated(
+        'The freeze, still until 2026-12-01, now blocks hotfixes.',
+        'The freeze now blocks hotfixes.',
+        'The freeze runs until 2026-12-01.',
+        ['freeze'],
+        { newer: 'Correction: it blocks hotfixes and merges.', corrects: true },
+      );
+      expect(before.validTo).toBe('2026-12-02T00:00:00.000Z');
+      // The corrected memory's end came from its own text: read again, there is none.
+      expect(later.validTo).toBeNull();
+      expect(later.endReason).toBe('corrected');
+      // The correction set no end of its own and copied that one: it gets the new end, and keeps
+      // its text.
+      expect(newer?.validTo).toBeNull();
+      expect(newer?.text).toBe('Correction: it blocks hotfixes and merges.');
+      expect(isCurrent(newer!, new Date('2026-12-03T00:00:00.000Z'))).toBe(true);
+    });
+
+    it('occurrences.forget-rewrite-reads-an-end-a-refine-carried-over', async () => {
+      const { before, later } = await forgetRestated(
+        'The 2026-12-01 freeze also blocks hotfixes.',
+        'The freeze also blocks hotfixes.',
+        'The freeze runs until 2026-12-01.',
+        ['freeze'],
+        { refinedFrom: 'The freeze still runs until 2026-12-01.' },
+      );
+      // The refined text sets no end; the end came with the text before it.
+      expect(before.validTo).toBe('2026-12-02T00:00:00.000Z');
+      expect(later.validTo).toBeNull();
+      expect(isCurrent(later, new Date('2026-12-03T00:00:00.000Z'))).toBe(true);
     });
   });
 }

@@ -975,12 +975,18 @@ describe('rewrittenOccurred', () => {
     expect((await store.get(TG, 'b'))?.occurred).toBeUndefined();
   });
 
-  it('forget.rewrite-reads-only-the-latest-writes-own-interval', async () => {
+  it('forget.rewrite-reads-an-end-carried-over-unless-a-later-write-recorded-another', async () => {
     const end = '2026-12-01T00:00:00.000Z';
-    // Refined: the end came with the earlier text, and the refine kept it without stating one.
-    const decisions: Decision[] = [
-      { stage: 'temporal', question: 'interval', answer: `turn .. ${end}`, probability: 1 },
+    const interval = (to: string): Decision => ({
+      stage: 'temporal',
+      question: 'interval',
+      answer: `turn .. ${to}`,
+      probability: 1,
+    });
+    const refined = (between: Decision[]): Decision[] => [
+      interval(end),
       { stage: 'write', question: 'action', answer: 'ADD', probability: 1 },
+      ...between,
       {
         stage: 'refine',
         question: 'previous-text',
@@ -989,18 +995,88 @@ describe('rewrittenOccurred', () => {
       },
       { stage: 'write', question: 'action', answer: 'REFINE', probability: 1 },
     ];
-    const { store } = await restating(
-      '2026-11-04T10:00:00.000Z',
-      0,
-      'The deploy on 2026-10-01 used build 2.5.',
-      { validTo: end, source: { harness: 'test', decisions } },
-    );
+    const forgetWith = async (decisions: Decision[]) => {
+      const { store } = await restating(
+        '2026-11-04T10:00:00.000Z',
+        0,
+        'The deploy on 2026-10-01 used build 2.5.',
+        { validTo: end, source: { harness: 'test', decisions } },
+      );
+      const r = await forgetMemory(
+        { store, write: rewriteTo('The deploy used build 2.5.') },
+        TG,
+        'a',
+      );
+      expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
+      return (await store.get(TG, 'b'))?.validTo;
+    };
+    // The refine set no end and carried the earlier text's over: read again, there is none.
+    expect(await forgetWith(refined([]))).toBeNull();
+    // A later write recorded another end: the earlier one no longer says where this one came from.
+    expect(await forgetWith(refined([interval('2026-12-15T00:00:00.000Z')]))).toBe(end);
+  });
+
+  it('forget.a-correction-changed-meanwhile-is-reported-and-keeps-its-end', async () => {
+    const store = createMemoryStore();
+    const t = '2026-11-02T10:00:00.000Z';
+    const end = '2026-12-02T00:00:00.000Z';
+    const write = (answer: string): Decision => ({
+      stage: 'write',
+      question: 'action',
+      answer,
+      probability: 1,
+    });
+    const base = { createdAt: t, updatedAt: t, validFrom: t, entities: ['freeze'] };
+    await store.upsertMany(TG, [
+      makeMemory({
+        ...base,
+        id: 'a',
+        text: 'The freeze runs until 2026-12-01.',
+        supersededBy: 'b',
+      }),
+      makeMemory({
+        ...base,
+        id: 'b',
+        text: 'The freeze, still until 2026-12-01, now blocks hotfixes.',
+        validTo: end,
+        expiredAt: t,
+        endReason: 'corrected',
+        supersedes: 'a',
+        supersededBy: 'c',
+        source: {
+          harness: 'test',
+          decisions: [
+            { stage: 'temporal', question: 'interval', answer: `turn .. ${end}`, probability: 1 },
+            write('ADD'),
+          ],
+        },
+      }),
+      makeMemory({
+        ...base,
+        id: 'c',
+        text: 'Correction: it blocks hotfixes and merges.',
+        validTo: end,
+        supersedes: 'b',
+        source: { harness: 'test', decisions: [write('CORRECT')] },
+      }),
+    ]);
+    // Another write changes the correction just before the guarded write lands.
+    const racing: MemoryStore = {
+      ...store,
+      upsertManyIfUnchanged: async (g, writes) => {
+        const c = (await store.get(g, 'c'))!;
+        await store.upsert(g, { ...c, updatedAt: '2026-11-03T00:00:00.000Z' });
+        return store.upsertManyIfUnchanged!(g, writes);
+      },
+    };
     const r = await forgetMemory(
-      { store, write: rewriteTo('The deploy used build 2.5.') },
+      { store: racing, write: rewriteTo('The freeze now blocks hotfixes.') },
       TG,
       'a',
     );
-    expect(r.rewritten).toEqual([{ id: 'b', text: 'The deploy used build 2.5.' }]);
-    expect((await store.get(TG, 'b'))?.validTo).toBe(end);
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The freeze now blocks hotfixes.' }]);
+    expect(r.notRewritten).toEqual([{ id: 'c', reason: 'changed' }]);
+    expect((await store.get(TG, 'b'))?.validTo).toBeNull();
+    expect((await store.get(TG, 'c'))?.validTo).toBe(end);
   });
 });

@@ -2847,7 +2847,9 @@ and the SDK's `forget`) also checks the later memories of the forgotten one's su
    stated is removed; the day it was said stays. Its validity dates are kept when they did not
    come from its text (such as the end a later fact gave it). A start or end its text set ("moved
    from 2026-10-01 to 2026-10-08") is read again from the new text in the same way; when the new
-   text sets none, the start is the time it was first written and there is no end.
+   text sets none, the start is the time it was first written and there is no end. A memory that
+   corrected it and took that end, stating none of its own, gets the new end too, with its own
+   text left as it was.
    A rewrite only reuses the memory's own words, but it can still change what they say (drop a
    "not", or join two parts the wrong way), so read the line `oort forget` prints for it.
 4. The chain is re-linked over the gap, and the rewrites land only if no other write changed those
